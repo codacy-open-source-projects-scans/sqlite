@@ -1227,6 +1227,7 @@ static void charFunc(
       *zOut++ = 0x80 + (u8)(c & 0x3F);
     }                                                    \
   }
+  *zOut = 0;
   sqlite3_result_text64(context, (char*)z, zOut-z, sqlite3_free, SQLITE_UTF8);
 }
 
@@ -1704,7 +1705,7 @@ static void kahanBabuskaNeumaierStep(
 ** Add a (possibly large) integer to the running sum.
 */
 static void kahanBabuskaNeumaierStepInt64(volatile SumCtx *pSum, i64 iVal){
-  if( iVal<=-4503599627370496 || iVal>=+4503599627370496 ){
+  if( iVal<=-4503599627370496LL || iVal>=+4503599627370496LL ){
     i64 iBig, iSm;
     iSm = iVal % 16384;
     iBig = iVal - iSm;
@@ -1722,7 +1723,7 @@ static void kahanBabuskaNeumaierInit(
   volatile SumCtx *p,
   i64 iVal
 ){
-  if( iVal<=-4503599627370496 || iVal>=+4503599627370496 ){
+  if( iVal<=-4503599627370496LL || iVal>=+4503599627370496LL ){
     i64 iSm = iVal % 16384;
     p->rSum = (double)(iVal - iSm);
     p->rErr = (double)iSm;
@@ -1764,11 +1765,10 @@ static void sumStep(sqlite3_context *context, int argc, sqlite3_value **argv){
           p->ovrfl = 1;
           kahanBabuskaNeumaierInit(p, p->iSum);
           p->approx = 1;
-          kahanBabuskaNeumaierStep(p, sqlite3_value_double(argv[0]));
+          kahanBabuskaNeumaierStepInt64(p, sqlite3_value_int64(argv[0]));
         }
       }
     }else{
-      p->approx = 1;
       if( type==SQLITE_INTEGER ){
         kahanBabuskaNeumaierStepInt64(p, sqlite3_value_int64(argv[0]));
       }else{
