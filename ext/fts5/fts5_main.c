@@ -405,6 +405,10 @@ static int fts5InitVtab(
     pConfig->pzErrmsg = 0;
   }
 
+  if( rc==SQLITE_OK && pConfig->eContent==FTS5_CONTENT_NORMAL ){
+    rc = sqlite3_vtab_config(db, SQLITE_VTAB_CONSTRAINT_SUPPORT, (int)1);
+  }
+
   if( rc!=SQLITE_OK ){
     fts5FreeVtab(pTab);
     pTab = 0;
@@ -1329,6 +1333,9 @@ static int fts5FilterMethod(
     pCsr->iFirstRowid = fts5GetRowidLimit(pRowidGe, SMALLEST_INT64);
   }
 
+  rc = sqlite3Fts5IndexLoadConfig(pTab->p.pIndex);
+  if( rc!=SQLITE_OK ) goto filter_out;
+
   if( pTab->pSortCsr ){
     /* If pSortCsr is non-NULL, then this call is being made as part of 
     ** processing for a "... MATCH <expr> ORDER BY rank" query (ePlan is
@@ -1351,6 +1358,7 @@ static int fts5FilterMethod(
     pCsr->pExpr = pTab->pSortCsr->pExpr;
     rc = fts5CursorFirst(pTab, pCsr, bDesc);
   }else if( pCsr->pExpr ){
+    assert( rc==SQLITE_OK );
     rc = fts5CursorParseRank(pConfig, pCsr, pRank);
     if( rc==SQLITE_OK ){
       if( bOrderByRank ){
@@ -1685,7 +1693,7 @@ static int fts5UpdateMethod(
     assert( nArg!=1 || eType0==SQLITE_INTEGER );
 
     /* Filter out attempts to run UPDATE or DELETE on contentless tables.
-    ** This is not suported. Except - DELETE is supported if the CREATE
+    ** This is not suported. Except - they are both supported if the CREATE
     ** VIRTUAL TABLE statement contained "contentless_delete=1". */
     if( eType0==SQLITE_INTEGER 
      && pConfig->eContent==FTS5_CONTENT_NONE 
@@ -1714,7 +1722,8 @@ static int fts5UpdateMethod(
       }
 
       else if( eType0!=SQLITE_INTEGER ){     
-        /* If this is a REPLACE, first remove the current entry (if any) */
+        /* An INSERT statement. If the conflict-mode is REPLACE, first remove
+        ** the current entry (if any). */
         if( eConflict==SQLITE_REPLACE && eType1==SQLITE_INTEGER ){
           i64 iNew = sqlite3_value_int64(apVal[1]);  /* Rowid to delete */
           rc = sqlite3Fts5StorageDelete(pTab->pStorage, iNew, 0);
@@ -2850,9 +2859,33 @@ static int fts5ShadowName(const char *zName){
   return 0;
 }
 
+/*
+** Run an integrity check on the FTS5 data structures.  Return a string
+** if anything is found amiss.  Return a NULL pointer if everything is
+** OK.
+*/
+static int fts5Integrity(sqlite3_vtab *pVtab, char **pzErr){
+  Fts5FullTable *pTab = (Fts5FullTable*)pVtab;
+  Fts5Config *pConfig = pTab->p.pConfig;
+  char *zSql;
+  int rc;
+  zSql = sqlite3_mprintf(
+            "INSERT INTO \"%w\".\"%w\"(\"%w\") VALUES('integrity-check');",
+            pConfig->zDb, pConfig->zName, pConfig->zName);
+  rc = sqlite3_exec(pConfig->db, zSql, 0, 0, 0);
+  sqlite3_free(zSql);
+  if( (rc&0xff)==SQLITE_CORRUPT ){
+    *pzErr = sqlite3_mprintf("malformed inverted index for FTS5 table %s.%s",
+                pConfig->zDb, pConfig->zName);
+    rc = SQLITE_OK;
+  }
+  return rc;
+
+}
+
 static int fts5Init(sqlite3 *db){
   static const sqlite3_module fts5Mod = {
-    /* iVersion      */ 3,
+    /* iVersion      */ 4,
     /* xCreate       */ fts5CreateMethod,
     /* xConnect      */ fts5ConnectMethod,
     /* xBestIndex    */ fts5BestIndexMethod,
@@ -2875,7 +2908,8 @@ static int fts5Init(sqlite3 *db){
     /* xSavepoint    */ fts5SavepointMethod,
     /* xRelease      */ fts5ReleaseMethod,
     /* xRollbackTo   */ fts5RollbackToMethod,
-    /* xShadowName   */ fts5ShadowName
+    /* xShadowName   */ fts5ShadowName,
+    /* xIntegrity    */ fts5Integrity
   };
 
   int rc;

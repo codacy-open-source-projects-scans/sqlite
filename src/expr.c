@@ -2695,6 +2695,27 @@ int sqlite3IsRowid(const char *z){
 }
 
 /*
+** Return a pointer to a buffer containing a usable rowid alias for table
+** pTab. An alias is usable if there is not an explicit user-defined column 
+** of the same name.
+*/
+const char *sqlite3RowidAlias(Table *pTab){
+  const char *azOpt[] = {"_ROWID_", "ROWID", "OID"};
+  int ii;
+  assert( VisibleRowid(pTab) );
+  for(ii=0; ii<ArraySize(azOpt); ii++){
+    int iCol;
+    for(iCol=0; iCol<pTab->nCol; iCol++){
+      if( sqlite3_stricmp(azOpt[ii], pTab->aCol[iCol].zCnName)==0 ) break;
+    }
+    if( iCol==pTab->nCol ){
+      return azOpt[ii];
+    }
+  }
+  return 0;
+}
+
+/*
 ** pX is the RHS of an IN operator.  If pX is a SELECT statement
 ** that can be simplified to a direct table access, then return
 ** a pointer to the SELECT statement.  If pX is not a SELECT statement,
@@ -5048,7 +5069,7 @@ expr_code_doover:
 ** once. If no functions are involved, then factor the code out and put it at
 ** the end of the prepared statement in the initialization section.
 **
-** If regDest>=0 then the result is always stored in that register and the
+** If regDest>0 then the result is always stored in that register and the
 ** result is not reusable.  If regDest<0 then this routine is free to
 ** store the value wherever it wants.  The register where the expression
 ** is stored is returned.  When regDest<0, two identical expressions might
@@ -5063,6 +5084,7 @@ int sqlite3ExprCodeRunJustOnce(
 ){
   ExprList *p;
   assert( ConstFactorOk(pParse) );
+  assert( regDest!=0 );
   p = pParse->pConstExpr;
   if( regDest<0 && p ){
     struct ExprList_item *pItem;

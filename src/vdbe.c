@@ -5775,8 +5775,13 @@ case OP_RowCell: {
 ** the "primary" delete.  The others are all on OPFLAG_FORDELETE
 ** cursors or else are marked with the AUXDELETE flag.
 **
-** If the OPFLAG_NCHANGE flag of P2 (NB: P2 not P5) is set, then the row
-** change count is incremented (otherwise not).
+** If the OPFLAG_NCHANGE (0x01) flag of P2 (NB: P2 not P5) is set, then
+** the row change count is incremented (otherwise not).
+**
+** If the OPFLAG_ISNOOP (0x40) flag of P2 (not P5!) is set, then the
+** pre-update-hook for deletes is run, but the btree is otherwise unchanged.
+** This happens when the OP_Delete is to be shortly followed by an OP_Insert
+** with the same key, causing the btree entry to be overwritten.
 **
 ** P1 must not be pseudo-table.  It has to be a real table with
 ** multiple rows.
@@ -8123,6 +8128,50 @@ case OP_VOpen: {             /* ncycle */
     assert( db->mallocFailed );
     pModule->xClose(pVCur);
     goto no_mem;
+  }
+  break;
+}
+#endif /* SQLITE_OMIT_VIRTUALTABLE */
+
+#ifndef SQLITE_OMIT_VIRTUALTABLE
+/* Opcode: VCheck * P2 * P4 *
+**
+** P4 is a pointer to a Table object that is a virtual table that
+** supports the xIntegrity() method.  This opcode runs the xIntegrity()
+** method for that virtual table.  If an error is reported back, the error
+** message is stored in register P2.  If no errors are seen, register P2
+** is set to NULL.
+*/
+case OP_VCheck: {             /* out2 */
+  Table *pTab;
+  sqlite3_vtab *pVtab;
+  const sqlite3_module *pModule;
+  char *zErr = 0;
+
+  pOut = &aMem[pOp->p2];
+  sqlite3VdbeMemSetNull(pOut);  /* Innocent until proven guilty */
+  assert( pOp->p4type==P4_TABLE );
+  pTab = pOp->p4.pTab;
+  assert( pTab!=0 );
+  assert( IsVirtual(pTab) );
+  assert( pTab->u.vtab.p!=0 );
+  pVtab = pTab->u.vtab.p->pVtab;
+  assert( pVtab!=0 );
+  pModule = pVtab->pModule;
+  assert( pModule!=0 );
+  assert( pModule->iVersion>=4 );
+  assert( pModule->xIntegrity!=0 );
+  pTab->nTabRef++;
+  sqlite3VtabLock(pTab->u.vtab.p);
+  rc = pModule->xIntegrity(pVtab, &zErr);
+  sqlite3VtabUnlock(pTab->u.vtab.p);
+  sqlite3DeleteTable(db, pTab);
+  if( rc ){
+    sqlite3_free(zErr);
+    goto abort_due_to_error;
+  }
+  if( zErr ){
+    sqlite3VdbeMemSetStr(pOut, zErr, -1, SQLITE_UTF8, sqlite3_free);
   }
   break;
 }
