@@ -1623,6 +1623,7 @@ json_parse_restart:
   case '[': {
     /* Parse array */
     iThis = pParse->nBlob;
+    assert( i<=pParse->nJson );
     jsonBlobAppendNode(pParse, JSONB_ARRAY, pParse->nJson - i, 0);
     iStart = pParse->nBlob;
     if( pParse->oom ) return -1;
@@ -2027,6 +2028,10 @@ static void jsonReturnStringAsBlob(JsonString *pStr){
   JsonParse px;
   memset(&px, 0, sizeof(px));
   jsonStringTerminate(pStr);
+  if( pStr->eErr ){
+    sqlite3_result_error_nomem(pStr->pCtx);
+    return;
+  }
   px.zJson = pStr->zBuf;
   px.nJson = pStr->nUsed;
   px.db = sqlite3_context_db_handle(pStr->pCtx);
@@ -3359,8 +3364,9 @@ rebuild_from_cache:
   }
   p->zJson = (char*)sqlite3_value_text(pArg);
   p->nJson = sqlite3_value_bytes(pArg);
+  if( db->mallocFailed ) goto json_pfa_oom;
   if( p->nJson==0 ) goto json_pfa_malformed;
-  if( NEVER(p->zJson==0) ) goto json_pfa_oom;
+  assert( p->zJson!=0 );
   if( jsonConvertTextToBlob(p, (flgs & JSON_KEEPERROR) ? 0 : ctx) ){
     if( flgs & JSON_KEEPERROR ){
       p->nErr = 1;
