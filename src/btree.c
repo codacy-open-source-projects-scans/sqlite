@@ -6182,10 +6182,10 @@ i64 sqlite3BtreeRowCountEst(BtCursor *pCur){
   assert( cursorOwnsBtShared(pCur) );
   assert( sqlite3_mutex_held(pCur->pBtree->db->mutex) );
 
-  /* Currently this interface is only called by the OP_IfSmaller
-  ** opcode, and it that case the cursor will always be valid and
-  ** will always point to a leaf node. */
-  if( NEVER(pCur->eState!=CURSOR_VALID) ) return -1;
+  /* Currently this interface is only called by the OP_IfSizeBetween
+  ** opcode and the OP_Count opcode with P3=1.  In either case,
+  ** the cursor will always be valid unless the btree is empty. */
+  if( pCur->eState!=CURSOR_VALID ) return 0;
   if( NEVER(pCur->pPage->leaf==0) ) return -1;
 
   n = pCur->pPage->nCell;
@@ -7007,7 +7007,10 @@ static int fillInCell(
     n = nHeader + nPayload;
     testcase( n==3 );
     testcase( n==4 );
-    if( n<4 ) n = 4;
+    if( n<4 ){
+      n = 4;
+      pPayload[nPayload] = 0;
+    }
     *pnSize = n;
     assert( nSrc<=nPayload );
     testcase( nSrc<nPayload );
@@ -9453,7 +9456,10 @@ int sqlite3BtreeInsert(
   if( flags & BTREE_PREFORMAT ){
     rc = SQLITE_OK;
     szNew = p->pBt->nPreformatSize;
-    if( szNew<4 ) szNew = 4;
+    if( szNew<4 ){
+      szNew = 4;
+      newCell[3] = 0;
+    }
     if( ISAUTOVACUUM(p->pBt) && szNew>pPage->maxLocal ){
       CellInfo info;
       pPage->xParseCell(pPage, newCell, &info);
