@@ -54,7 +54,9 @@ proc usage {} {
 Usage: 
     $a0 ?SWITCHES? ?PERMUTATION? ?PATTERNS?
     $a0 PERMUTATION FILE
+    $a0 help
     $a0 njob ?NJOB?
+    $a0 script ?-msvc? CONFIG
     $a0 status
 
   where SWITCHES are:
@@ -89,6 +91,10 @@ directory as a running testrunner.tcl script that is running tests. The
 "status" command prints a report describing the current state and progress 
 of the tests. The "njob" command may be used to query or modify the number
 of sub-processes the test script uses to run tests.
+
+The "script" command outputs the script used to build a configuration.
+Add the "-msvc" option for a Windows-compatible script. For a list of
+available configurations enter "$a0 script help".
   }]]
 
   exit 1
@@ -159,6 +165,7 @@ switch -nocase -glob -- $tcl_platform(os) {
     set TRG(make)        make.sh
     set TRG(makecmd)     "bash make.sh"
     set TRG(testfixture) testfixture
+    set TRG(shell)       sqlite3
     set TRG(run)         run.sh
     set TRG(runcmd)      "bash run.sh"
   }
@@ -167,14 +174,16 @@ switch -nocase -glob -- $tcl_platform(os) {
     set TRG(make)        make.sh
     set TRG(makecmd)     "bash make.sh"
     set TRG(testfixture) testfixture
+    set TRG(shell)       sqlite3
     set TRG(run)         run.sh
     set TRG(runcmd)      "bash run.sh"
   }
   *win* {
     set TRG(platform)    win
     set TRG(make)        make.bat
-    set TRG(makecmd)     make.bat
+    set TRG(makecmd)     "call make.bat"
     set TRG(testfixture) testfixture.exe
+    set TRG(shell)       sqlite3.exe
     set TRG(run)         run.bat
     set TRG(runcmd)      "run.bat"
   }
@@ -323,6 +332,14 @@ if {([llength $argv]==2 || [llength $argv]==1)
   mydb close
   puts "$res"
   exit
+}
+#--------------------------------------------------------------------------
+
+#--------------------------------------------------------------------------
+# Check if this is the "help" command:
+#
+if {[string compare -nocase help [lindex $argv 0]]==0} {
+  usage
 }
 #--------------------------------------------------------------------------
 
@@ -617,7 +634,16 @@ proc add_job {args} {
   trdb last_insert_rowid
 }
 
-proc add_tcl_jobs {build config patternlist} {
+# Argument $build is either an empty string, or else a list of length 3 
+# describing the job to build testfixture. In the usual form:
+#
+#    {ID DIRNAME DISPLAYNAME}
+# 
+# e.g    
+#
+#    {1 /home/user/sqlite/test/testrunner_bld_xyz All-Debug}
+# 
+proc add_tcl_jobs {build config patternlist {shelldepid ""}} {
   global TRG
 
   set topdir [file dirname $::testdir]
@@ -666,33 +692,58 @@ proc add_tcl_jobs {build config patternlist} {
     if {[lsearch $lProp slow]>=0} { set priority 2 }
     if {[lsearch $lProp superslow]>=0} { set priority 4 }
 
+    set depid [lindex $build 0]
+    if {$shelldepid!="" && [lsearch $lProp shell]>=0} { set depid $shelldepid }
+
     add_job                            \
         -displaytype tcl               \
         -displayname $displayname      \
         -cmd $cmd                      \
-        -depid [lindex $build 0]       \
+        -depid $depid                  \
         -priority $priority
-
   }
 }
 
-proc add_build_job {buildname target} {
+proc add_build_job {buildname target {postcmd ""} {depid ""}} {
   global TRG
 
   set dirname "[string tolower [string map {- _} $buildname]]_$target"
   set dirname "testrunner_bld_$dirname"
+
+  set cmd "$TRG(makecmd) $target"
+  if {$postcmd!=""} {
+    append cmd "\n"
+    append cmd $postcmd
+  }
 
   set id [add_job                                \
     -displaytype bld                             \
     -displayname "Build $buildname ($target)"    \
     -dirname $dirname                            \
     -build $buildname                            \
-    -cmd  "$TRG(makecmd) $target"                \
+    -cmd  $cmd                                   \
+    -depid $depid                                \
     -priority 3
   ]
 
   list $id [file normalize $dirname] $buildname
 }
+
+proc add_shell_build_job {buildname dirname depid} {
+  global TRG
+
+  if {$TRG(platform)=="win"} {
+    set path [string map {/ \\} "$dirname/"]
+    set copycmd "xcopy $TRG(shell) $path"
+  } else {
+    set copycmd "cp $TRG(shell) $dirname/"
+  }
+
+  return [
+    add_build_job $buildname $TRG(shell) $copycmd $depid
+  ]
+}
+
 
 proc add_make_job {bld target} {
   global TRG
@@ -767,10 +818,19 @@ proc add_devtest_jobs {lBld patternlist} {
 
   foreach b $lBld {
     set bld [add_build_job $b $TRG(testfixture)]
-    add_tcl_jobs $bld veryquick $patternlist
+    add_tcl_jobs $bld veryquick $patternlist SHELL
     if {$patternlist==""} {
       add_fuzztest_jobs $b
     }
+
+    if {[trdb one "SELECT EXISTS (SELECT 1 FROM jobs WHERE depid='SHELL')"]} {
+      set sbld [add_shell_build_job $b [lindex $bld 1] [lindex $bld 0]]
+      set sbldid [lindex $sbld 0]
+      trdb eval {
+        UPDATE jobs SET depid=$sbldid WHERE depid='SHELL'
+      }
+    }
+
   }
 }
 
@@ -948,6 +1008,11 @@ proc launch_another_job {iJob} {
     close $fd
   }
 
+  set job_cmd $job(cmd)
+  if {$TRG(platform)!="win"} {
+    set job_cmd "export SQLITE_TMPDIR=\"[file normalize $dir]\"\n$job_cmd"
+  }
+
   if { $TRG(dryrun) } {
 
     mark_job_as_finished $job(jobid) "" done 0
@@ -962,7 +1027,7 @@ proc launch_another_job {iJob} {
     set pwd [pwd]
     cd $dir
     set fd [open $TRG(run) w]
-    puts $fd $job(cmd) 
+    puts $fd $job_cmd
     close $fd
     set fd [open "|$TRG(runcmd) 2>@1" r]
     cd $pwd
