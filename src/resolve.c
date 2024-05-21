@@ -828,8 +828,12 @@ static int lookupName(
   ** If a generated column is referenced, set bits for every column
   ** of the table.
   */
-  if( pExpr->iColumn>=0 && cnt==1 && pMatch!=0 ){
-    pMatch->colUsed |= sqlite3ExprColUsed(pExpr);
+  if( pMatch ){
+    if( pExpr->iColumn>=0 ){
+      pMatch->colUsed |= sqlite3ExprColUsed(pExpr);
+    }else{
+      pMatch->fg.rowidUsed = 1;
+    }
   }
 
   pExpr->op = eNewExprOp;
@@ -1281,11 +1285,9 @@ static int resolveExprStep(Walker *pWalker, Expr *pExpr){
 #endif
         }
       }
-#ifndef SQLITE_OMIT_WINDOWFUNC
-      else if( ExprHasProperty(pExpr, EP_WinFunc) ){
+      else if( ExprHasProperty(pExpr, EP_WinFunc) || pExpr->pLeft ){
         is_agg = 1;
       }
-#endif
       sqlite3WalkExprList(pWalker, pList);
       if( is_agg ){
         if( pExpr->pLeft ){
