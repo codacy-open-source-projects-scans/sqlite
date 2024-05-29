@@ -3795,13 +3795,6 @@ static void jsonArrayLengthFunc(
   jsonParseFree(p);
 }
 
-/* True if the string is all digits */
-static int jsonAllDigits(const char *z, int n){
-  int i;
-  for(i=0; i<n && sqlite3Isdigit(z[i]); i++){}
-  return i==n;
-}
-
 /* True if the string is all alphanumerics and underscores */
 static int jsonAllAlphanum(const char *z, int n){
   int i;
@@ -3864,10 +3857,16 @@ static void jsonExtractFunc(
       **     NUMBER   ==>  $[NUMBER]     // PG compatible
       **     LABEL    ==>  $.LABEL       // PG compatible
       **     [NUMBER] ==>  $[NUMBER]     // Not PG.  Purely for convenience
+      **
+      ** Updated 2024-05-27:  If the NUMBER is negative, then PG counts from
+      ** the right of the array.  Hence for negative NUMBER:
+      **
+      **     NUMBER   ==>  $[#NUMBER]    // PG compatible
       */
       jsonStringInit(&jx, ctx);
-      if( jsonAllDigits(zPath, nPath) ){
+      if( sqlite3_value_type(argv[i])==SQLITE_INTEGER ){
         jsonAppendRawNZ(&jx, "[", 1);
+        if( zPath[0]=='-' ) jsonAppendRawNZ(&jx,"#",1);
         jsonAppendRaw(&jx, zPath, nPath);
         jsonAppendRawNZ(&jx, "]", 2);
       }else if( jsonAllAlphanum(zPath, nPath) ){
