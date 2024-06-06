@@ -234,7 +234,6 @@ static int fts5ConfigSetEnum(
 ** eventually free any such error message using sqlite3_free().
 */
 static int fts5ConfigParseSpecial(
-  Fts5Global *pGlobal,
   Fts5Config *pConfig,            /* Configuration object to update */
   const char *zCmd,               /* Special command to parse */
   const char *zArg,               /* Argument to parse */
@@ -590,7 +589,7 @@ int sqlite3Fts5ConfigParse(
         rc = SQLITE_ERROR;
       }else{
         if( bOption ){
-          rc = fts5ConfigParseSpecial(pGlobal, pRet, 
+          rc = fts5ConfigParseSpecial(pRet, 
             ALWAYS(zOne)?zOne:"",
             zTwo?zTwo:"",
             pzErr
@@ -672,7 +671,7 @@ void sqlite3Fts5ConfigFree(Fts5Config *pConfig){
     if( pConfig->t.pTok ){
       pConfig->t.pTokApi->xDelete(pConfig->t.pTok);
     }
-    sqlite3_free(pConfig->t.azArg);
+    sqlite3_free((char*)pConfig->t.azArg);
     sqlite3_free(pConfig->zDb);
     sqlite3_free(pConfig->zName);
     for(i=0; i<pConfig->nCol; i++){

@@ -5518,15 +5518,18 @@ static char **readline_completion(const char *zText, int iStart, int iEnd){
 
 #elif HAVE_LINENOISE
 /*
-** Linenoise completion callback
+** Linenoise completion callback. Note that the 3rd argument is from
+** the "msteveb" version of linenoise, not the "antirez" version.
 */
-static void linenoise_completion(const char *zLine, linenoiseCompletions *lc){
+static void linenoise_completion(const char *zLine, linenoiseCompletions *lc,
+                                 void *pUserData){
   i64 nLine = strlen(zLine);
   i64 i, iStart;
   sqlite3_stmt *pStmt = 0;
   char *zSql;
   char zBuf[1000];
 
+  UNUSED_PARAMETER(pUserData);
   if( nLine>(i64)sizeof(zBuf)-30 ) return;
   if( zLine[0]=='.' || zLine[0]=='#') return;
   for(i=nLine-1; i>=0 && (isalnum(zLine[i]) || zLine[i]=='_'); i--){}
@@ -8952,6 +8955,7 @@ static int do_meta_command(char *zLine, ShellState *p){
         eputf("%s: empty file\n", sCtx.zFile);
         import_cleanup(&sCtx);
         rc = 1;
+        sqlite3_free(zCreate);
         goto meta_command_exit;
       }
       zCreate = sqlite3_mprintf("%z%z\n", zCreate, zColDefs);
@@ -10902,7 +10906,7 @@ static int do_meta_command(char *zLine, ShellState *p){
 #ifdef YYCOVERAGE
     {"parser_coverage",    SQLITE_TESTCTRL_PARSER_COVERAGE,0,""             },
 #endif
-    {"pending_byte",       SQLITE_TESTCTRL_PENDING_BYTE,0, "OFFSET  "       },
+    {"pending_byte",       SQLITE_TESTCTRL_PENDING_BYTE,1, "OFFSET  "       },
     {"prng_restore",       SQLITE_TESTCTRL_PRNG_RESTORE,0, ""               },
     {"prng_save",          SQLITE_TESTCTRL_PRNG_SAVE,   0, ""               },
     {"prng_seed",          SQLITE_TESTCTRL_PRNG_SEED,   0, "SEED ?db?"      },
@@ -12746,8 +12750,8 @@ int SQLITE_CDECL wmain(int argc, wchar_t **wargv){
       if( azCmd[i][0]=='.' ){
         rc = do_meta_command(azCmd[i], &data);
         if( rc ){
-          free(azCmd);
-          return rc==2 ? 0 : rc;
+          if( rc==2 ) rc = 0;
+          goto shell_main_exit;
         }
       }else{
         open_db(&data, 0);
@@ -12760,8 +12764,8 @@ int SQLITE_CDECL wmain(int argc, wchar_t **wargv){
             eputf("Error: unable to process SQL: %s\n", azCmd[i]);
           }
           sqlite3_free(zErrMsg);
-          free(azCmd);
-          return rc!=0 ? rc : 1;
+          if( rc==0 ) rc = 1;
+          goto shell_main_exit;
         }
       }
     }
@@ -12799,7 +12803,7 @@ int SQLITE_CDECL wmain(int argc, wchar_t **wargv){
 #if HAVE_READLINE || HAVE_EDITLINE
       rl_attempted_completion_function = readline_completion;
 #elif HAVE_LINENOISE
-      linenoiseSetCompletionCallback(linenoise_completion);
+      linenoiseSetCompletionCallback(linenoise_completion, NULL);
 #endif
       data.in = 0;
       rc = process_input(&data);
@@ -12821,6 +12825,7 @@ int SQLITE_CDECL wmain(int argc, wchar_t **wargv){
     expertFinish(&data, 1, 0);
   }
 #endif
+ shell_main_exit:
   free(azCmd);
   set_table_name(&data, 0);
   if( data.db ){
