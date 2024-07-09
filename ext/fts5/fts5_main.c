@@ -963,6 +963,7 @@ static int fts5NextMethod(sqlite3_vtab_cursor *pCursor){
           }
         }else{
           rc = SQLITE_OK;
+          CsrFlagSet(pCsr, FTS5CSR_REQUIRE_DOCSIZE);
         }
         break;
       }
@@ -1217,6 +1218,18 @@ static i64 fts5GetRowidLimit(sqlite3_value *pVal, i64 iDefault){
 }
 
 /*
+** Set the error message on the virtual table passed as the first argument.
+*/
+static void fts5SetVtabError(Fts5FullTable *p, const char *zFormat, ...){
+  va_list ap;                     /* ... printf arguments */
+  va_start(ap, zFormat);
+  sqlite3_free(p->p.base.zErrMsg);
+  p->p.base.zErrMsg = sqlite3_vmprintf(zFormat, ap);
+  va_end(ap);
+}
+
+
+/*
 ** This is the xFilter interface for the virtual table.  See
 ** the virtual table xFilter method documentation for additional
 ** information.
@@ -1391,9 +1404,7 @@ static int fts5FilterMethod(
       }
     }
   }else if( pConfig->zContent==0 ){
-    *pConfig->pzErrmsg = sqlite3_mprintf(
-        "%s: table does not support scanning", pConfig->zName
-    );
+    fts5SetVtabError(pTab,"%s: table does not support scanning",pConfig->zName);
     rc = SQLITE_ERROR;
   }else{
     /* This is either a full-table scan (ePlan==FTS5_PLAN_SCAN) or a lookup
@@ -1436,9 +1447,13 @@ static i64 fts5CursorRowid(Fts5Cursor *pCsr){
   assert( pCsr->ePlan==FTS5_PLAN_MATCH 
        || pCsr->ePlan==FTS5_PLAN_SORTED_MATCH 
        || pCsr->ePlan==FTS5_PLAN_SOURCE 
+       || pCsr->ePlan==FTS5_PLAN_SCAN 
+       || pCsr->ePlan==FTS5_PLAN_ROWID 
   );
   if( pCsr->pSorter ){
     return pCsr->pSorter->iRowid;
+  }else if( pCsr->ePlan>=FTS5_PLAN_SCAN ){
+    return sqlite3_column_int64(pCsr->pStmt, 0);
   }else{
     return sqlite3Fts5ExprRowid(pCsr->pExpr);
   }
@@ -1455,24 +1470,15 @@ static int fts5RowidMethod(sqlite3_vtab_cursor *pCursor, sqlite_int64 *pRowid){
   int ePlan = pCsr->ePlan;
   
   assert( CsrFlagTest(pCsr, FTS5CSR_EOF)==0 );
-  switch( ePlan ){
-    case FTS5_PLAN_SPECIAL:
-      *pRowid = 0;
-      break;
-
-    case FTS5_PLAN_SOURCE:
-    case FTS5_PLAN_MATCH:
-    case FTS5_PLAN_SORTED_MATCH:
-      *pRowid = fts5CursorRowid(pCsr);
-      break;
-
-    default:
-      *pRowid = sqlite3_column_int64(pCsr->pStmt, 0);
-      break;
+  if( ePlan==FTS5_PLAN_SPECIAL ){
+    *pRowid = 0;
+  }else{
+    *pRowid = fts5CursorRowid(pCsr);
   }
 
   return SQLITE_OK;
 }
+
 
 /*
 ** If the cursor requires seeking (bSeekRequired flag is set), seek it.
@@ -1510,22 +1516,19 @@ static int fts5SeekCursor(Fts5Cursor *pCsr, int bErrormsg){
       rc = sqlite3_reset(pCsr->pStmt);
       if( rc==SQLITE_OK ){
         rc = FTS5_CORRUPT;
+        fts5SetVtabError((Fts5FullTable*)pTab, 
+            "fts5: missing row %lld from content table %s",
+            fts5CursorRowid(pCsr), 
+            pTab->pConfig->zContent
+        );
       }else if( pTab->pConfig->pzErrmsg ){
-        *pTab->pConfig->pzErrmsg = sqlite3_mprintf(
+        fts5SetVtabError((Fts5FullTable*)pTab, 
             "%s", sqlite3_errmsg(pTab->pConfig->db)
         );
       }
     }
   }
   return rc;
-}
-
-static void fts5SetVtabError(Fts5FullTable *p, const char *zFormat, ...){
-  va_list ap;                     /* ... printf arguments */
-  va_start(ap, zFormat);
-  assert( p->p.base.zErrMsg==0 );
-  p->p.base.zErrMsg = sqlite3_vmprintf(zFormat, ap);
-  va_end(ap);
 }
 
 /*
@@ -2501,7 +2504,10 @@ static void fts5ApiCallback(
     sqlite3_result_error(context, zErr, -1);
     sqlite3_free(zErr);
   }else{
+    sqlite3_vtab *pTab = pCsr->base.pVtab;
     fts5ApiInvoke(pAux, pCsr, context, argc-1, &argv[1]);
+    sqlite3_free(pTab->zErrMsg);
+    pTab->zErrMsg = 0;
   }
 }
 
