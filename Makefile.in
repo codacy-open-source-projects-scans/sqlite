@@ -83,9 +83,13 @@ TEMP_STORE = -DSQLITE_TEMP_STORE=@TEMP_STORE@
 # based on configuration. (-DSQLITE_OMIT*, -DSQLITE_ENABLE*).
 # The same set of OMIT and ENABLE flags should be passed to the
 # LEMON parser generator and the mkkeywordhash tool as well.
-OPT_FEATURE_FLAGS = @OPT_FEATURE_FLAGS@
+#
+# Add OPTIONS=... on the command line to append additional options
+# to the OPT_FEATURE_FLAGS.
+#
+OPT_FEATURE_FLAGS = @OPT_FEATURE_FLAGS@ $(OPTIONS)
 
-TCC += $(OPT_FEATURE_FLAGS)
+TCC += $(OPT_FEATURE_FLAGS) 
 
 # Add in any optional parameters specified on the make commane line
 # ie.  make "OPTS=-DSQLITE_ENABLE_FOO=1 -DSQLITE_OMIT_FOO=1".
@@ -116,6 +120,11 @@ HAVE_TCL = @HAVE_TCL@
 # know the specific version we want to use
 #
 TCLSH_CMD = @TCLSH_CMD@
+
+# Additional options when running tests using testrunner.tcl
+# This is usually either blank, or else --status
+#
+TSTRNNR_OPTS = @TSTRNNR_OPTS@
 
 # Where do we want to install the tcl plugin
 #
@@ -1358,15 +1367,20 @@ tcltest:	./testfixture$(TEXE)
 testrunner:	testfixture$(TEXE)
 	./testfixture$(TEXE) $(TOP)/test/testrunner.tcl
 
-# Runs both fuzztest and testrunner, consecutively.
+# This is the testing target preferred by the core SQLite developers.
+# It runs tests under a standard configuration, regardless of how
+# ./configure was run.  The devs run "make devtest" prior to each
+# check-in, at a minimum.  Probably other tests too, but at least this
+# one.
 #
-devtest:	srctree-check testfixture$(TEXE) fuzztest testrunner
+devtest:	srctree-check sourcetest
+	$(TCLSH_CMD) $(TOP)/test/testrunner.tcl mdevtest $(TSTRNNR_OPTS)
 
 mdevtest: srctree-check has_tclsh85
-	$(TCLSH_CMD) $(TOP)/test/testrunner.tcl mdevtest
+	$(TCLSH_CMD) $(TOP)/test/testrunner.tcl mdevtest $(TSTRNNR_OPTS)
 
 sdevtest: has_tclsh85
-	$(TCLSH_CMD) $(TOP)/test/testrunner.tcl sdevtest
+	$(TCLSH_CMD) $(TOP)/test/testrunner.tcl sdevtest $(TSTRNNR_OPTS)
 
 # Validate that various generated files in the source tree
 # are up-to-date.
@@ -1376,16 +1390,19 @@ srctree-check:	$(TOP)/tool/srctree-check.tcl
 
 # Testing for a release
 #
-releasetest: srctree-check testfixture$(TEXE)
-	./testfixture$(TEXE) $(TOP)/test/testrunner.tcl release
+releasetest: srctree-check has_tclsh85
+	$(TCLSH_CMD) $(TOP)/test/testrunner.tcl release $(TSTRNNR_OPTS)
 
 # Minimal testing that runs in less than 3 minutes
 #
 quicktest:	./testfixture$(TEXE)
 	./testfixture$(TEXE) $(TOP)/test/extraquick.test $(TESTOPTS)
 
-# This is the common case.  Run many tests that do not take too long,
-# including fuzzcheck, sqlite3_analyzer, and sqldiff tests.
+# Try to run tests on whatever options are specified by the
+# ./configure.  The developers seldom use this target.  Instead
+# they use "make devtest" which runs tests on a standard set of
+# options regardless of how SQLite is configured.  This "test"
+# target is provided for legacy only.
 #
 test:	srctree-check fuzztest sourcetest $(TESTPROGS) tcltest
 
@@ -1402,8 +1419,8 @@ valgrindtest:	$(TESTPROGS) valgrindfuzz
 smoketest:	$(TESTPROGS) fuzzcheck$(TEXE)
 	./testfixture$(TEXE) $(TOP)/test/main.test $(TESTOPTS)
 
-shelltest: $(TESTPROGS)
-	./testfixture$(TEXT) $(TOP)/test/permutations.test shell
+shelltest:
+	$(TCLSH_CMD) $(TOP)/test/testrunner.tcl release shell
 
 sqlite3_analyzer.c: sqlite3.c $(TOP)/src/tclsqlite.c $(TOP)/tool/spaceanal.tcl $(TOP)/tool/mkccode.tcl $(TOP)/tool/sqlite3_analyzer.c.in has_tclsh85
 	$(TCLSH_CMD) $(TOP)/tool/mkccode.tcl $(TOP)/tool/sqlite3_analyzer.c.in >sqlite3_analyzer.c
