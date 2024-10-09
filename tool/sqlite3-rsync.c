@@ -1197,6 +1197,7 @@ static void originSide(SQLiteRsync *p){
   int c = 0;
   unsigned int nPage = 0;
   unsigned int iPage = 0;
+  unsigned int lockBytePage = 0;
   unsigned int szPg = 0;
   sqlite3_stmt *pCkHash = 0;
   char buf[200];
@@ -1235,6 +1236,7 @@ static void originSide(SQLiteRsync *p){
       p->nPage = nPage;
       p->szPage = szPg;
       p->iProtocol = PROTOCOL_VERSION;
+      lockBytePage = (1<<30)/szPg + 1;
     }
   }
   
@@ -1290,6 +1292,7 @@ static void originSide(SQLiteRsync *p){
                     " INSERT INTO badHash SELECT n FROM c",
                     iPage+1, p->nPage);
         }
+        runSql(p, "DELETE FROM badHash WHERE pgno=%d", lockBytePage);
         pStmt = prepareStmt(p,
                "SELECT pgno, data"
                "  FROM badHash JOIN sqlite_dbpage('main') USING(pgno)");
@@ -1456,15 +1459,18 @@ static void replicaSide(SQLiteRsync *p){
         }else if( p->nErr ){
           runSql(p, "ROLLBACK");
         }else{
-          int rc;
-          sqlite3_bind_int64(pIns, 1, nOPage);
-          sqlite3_bind_null(pIns, 2);
-          rc = sqlite3_step(pIns);
-          if( rc!=SQLITE_DONE ){
-            reportError(p, "SQL statement [%s] failed (pgno=%u, data=NULL): %s",
-                   sqlite3_sql(pIns), nOPage, sqlite3_errmsg(p->db));
+          if( nOPage<0xffffffff ){
+            int rc;
+            sqlite3_bind_int64(pIns, 1, nOPage+1);
+            sqlite3_bind_null(pIns, 2);
+            rc = sqlite3_step(pIns);
+            if( rc!=SQLITE_DONE ){
+              reportError(p,
+                  "SQL statement [%s] failed (pgno=%u, data=NULL): %s",
+                  sqlite3_sql(pIns), nOPage, sqlite3_errmsg(p->db));
+            }
+            sqlite3_reset(pIns);
           }
-          sqlite3_reset(pIns);
           p->nPage = nOPage;
           runSql(p, "COMMIT");
         }
