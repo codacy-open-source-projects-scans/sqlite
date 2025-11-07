@@ -128,19 +128,25 @@
 #endif
 
 #ifdef SQLITE_WASM_EXTRA_INIT
-#  define SQLITE_EXTRA_INIT sqlite3_wasm_extra_init
+/* SQLITE_EXTRA_INIT vs SQLITE_EXTRA_INIT_MUTEXED:
+** see https://sqlite.org/forum/forumpost/14183b98fc0b1dea */
+#  define SQLITE_EXTRA_INIT_MUTEXED sqlite3_wasm_extra_init
 #endif
 
 /*
 ** If SQLITE_WASM_BARE_BONES is defined, undefine most of the ENABLE
-** macros.
+** macros. This will, when using the canonical makefile, also elide
+** any C functions from the WASM exports which are listed in
+** ./EXPORT_FUNCTIONS.sqlite3-extras.
 */
 #ifdef SQLITE_WASM_BARE_BONES
+#  undef  SQLITE_ENABLE_COLUMN_METADATA
 #  undef  SQLITE_ENABLE_DBPAGE_VTAB
 #  undef  SQLITE_ENABLE_DBSTAT_VTAB
 #  undef  SQLITE_ENABLE_EXPLAIN_COMMENTS
 #  undef  SQLITE_ENABLE_FTS5
 #  undef  SQLITE_ENABLE_OFFSET_SQL_FUNC
+#  undef  SQLITE_ENABLE_PERCENTILE
 #  undef  SQLITE_ENABLE_PREUPDATE_HOOK
 #  undef  SQLITE_ENABLE_RTREE
 #  undef  SQLITE_ENABLE_SESSION
@@ -223,9 +229,10 @@
 
 /*
 ** Which sqlite3.c we're using needs to be configurable to enable
-** building against a custom copy, e.g. the SEE variant. Note that we
-** #include the .c file, rather than the header, so that the WASM
-** extensions have access to private API internals.
+** building against a custom copy, e.g. the SEE variant. We #include
+** the .c file, rather than the header, so that the WASM extensions
+** have access to private API internals (namely for kvvfs and
+** SQLTester pieces).
 **
 ** The caveat here is that custom variants need to account for
 ** exporting any necessary symbols (e.g. sqlite3_activate_see()).  We
@@ -284,7 +291,7 @@ SQLITE_WASM_EXPORT void * sqlite3__wasm_stack_alloc(int n){
 /*
 ** State for the "pseudo-stack" allocator implemented in
 ** sqlite3__wasm_pstack_xyz(). In order to avoid colliding with
-** Emscripten-controled stack space, it carves out a bit of stack
+** Emscripten-controlled stack space, it carves out a bit of stack
 ** memory to use for that purpose. This memory ends up in the
 ** WASM-managed memory, such that routines which manipulate the wasm
 ** heap can also be used to manipulate this memory.
@@ -294,7 +301,10 @@ SQLITE_WASM_EXPORT void * sqlite3__wasm_stack_alloc(int n){
 ** enough for general-purpose string conversions because some of our
 ** tests use input files (strings) of 16MB+.
 */
-static unsigned char PStack_mem[512 * 8] = {0};
+static unsigned char PStack_mem[
+  1024 * 4 /* API docs guaranty at least 2kb and it's been set at 4kb
+              since it was introduced. */
+] = {0};
 static struct {
   unsigned const char * const pBegin;/* Start (inclusive) of memory */
   unsigned const char * const pEnd;  /* One-after-the-end of memory */
@@ -311,12 +321,12 @@ SQLITE_WASM_EXPORT void * sqlite3__wasm_pstack_ptr(void){
   return PStack.pPos;
 }
 /*
-** Sets the pstack position poitner to p. Results are undefined if the
+** Sets the pstack position pointer to p. Results are undefined if the
 ** given value did not come from sqlite3__wasm_pstack_ptr().
 */
 SQLITE_WASM_EXPORT void sqlite3__wasm_pstack_restore(unsigned char * p){
   assert(p>=PStack.pBegin && p<=PStack.pEnd && p>=PStack.pPos);
-  assert(0==((unsigned long long)p & 0x7));
+  assert(0==((unsigned long long)p & 0x7) /* 8-byte aligned */);
   if(p>=PStack.pBegin && p<=PStack.pEnd /*&& p>=PStack.pPos*/){
     PStack.pPos = p;
   }
@@ -331,7 +341,6 @@ SQLITE_WASM_EXPORT void sqlite3__wasm_pstack_restore(unsigned char * p){
 */
 SQLITE_WASM_EXPORT void * sqlite3__wasm_pstack_alloc(int n){
   if( n<=0 ) return 0;
-  //if( n & 0x7 ) n += 8 - (n & 0x7) /* align to 8-byte boundary */;
   n = (n + 7) & ~7 /* align to 8-byte boundary */;
   if( PStack.pBegin + n > PStack.pPos /*not enough space left*/
       || PStack.pBegin + n <= PStack.pBegin /*overflow*/ ) return 0;
@@ -357,35 +366,6 @@ SQLITE_WASM_EXPORT int sqlite3__wasm_pstack_quota(void){
   return (int)(PStack.pEnd - PStack.pBegin);
 }
 
-/*
-** This function is NOT part of the sqlite3 public API. It is strictly
-** for use by the sqlite project's own JS/WASM bindings.
-**
-** For purposes of certain hand-crafted C/Wasm function bindings, we
-** need a way of reporting errors which is consistent with the rest of
-** the C API, as opposed to throwing JS exceptions. To that end, this
-** internal-use-only function is a thin proxy around
-** sqlite3ErrorWithMessage(). The intent is that it only be used from
-** Wasm bindings such as sqlite3_prepare_v2/v3(), and definitely not
-** from client code.
-**
-** Returns err_code.
-*/
-SQLITE_WASM_EXPORT
-int sqlite3__wasm_db_error(sqlite3*db, int err_code, const char *zMsg){
-  if( db!=0 ){
-    if( 0!=zMsg ){
-      const int nMsg = sqlite3Strlen30(zMsg);
-      sqlite3_mutex_enter(sqlite3_db_mutex(db));
-      sqlite3ErrorWithMsg(db, err_code, "%.*s", nMsg, zMsg);
-      sqlite3_mutex_leave(sqlite3_db_mutex(db));
-    }else{
-      sqlite3ErrorWithMsg(db, err_code, NULL);
-    }
-  }
-  return err_code;
-}
-
 #if SQLITE_WASM_ENABLE_C_TESTS
 struct WasmTestStruct {
   int v4;
@@ -398,13 +378,21 @@ typedef struct WasmTestStruct WasmTestStruct;
 SQLITE_WASM_EXPORT
 void sqlite3__wasm_test_struct(WasmTestStruct * s){
   if(s){
+    if( 0 ){
+      /* Do not be alarmed by the small (and odd) pointer values.
+         Function pointers in WASM are their index into the
+         indirect function table, not their address. */
+      fprintf(stderr,"%s:%s()@%p s=@%p xFunc=@%p\n",
+              __FILE__, __func__,
+              (void*)sqlite3__wasm_test_struct,
+              s, (void*)s->xFunc);
+    }
     s->v4 *= 2;
     s->v8 = s->v4 * 2;
     s->ppV = s;
     s->cstr = __FILE__;
     if(s->xFunc) s->xFunc(s);
   }
-  return;
 }
 #endif /* SQLITE_WASM_ENABLE_C_TESTS */
 
@@ -422,10 +410,18 @@ void sqlite3__wasm_test_struct(WasmTestStruct * s){
 ** If this function returns NULL then it means that the internal
 ** buffer is not large enough for the generated JSON and needs to be
 ** increased. In debug builds that will trigger an assert().
+**
+** 2025-09-19: for reasons entirely not understood, building with emcc
+** -sMEMORY64=2 causes this function to fail (return 0). -sMEMORY64=1
+** fails to compile with "tables may not be 64-bit" but does not tell
+** us where it's happening.
 */
 SQLITE_WASM_EXPORT
 const char * sqlite3__wasm_enum_json(void){
-  static char aBuffer[1024 * 20] = {0} /* where the JSON goes */;
+  static char aBuffer[1024 * 20] =
+    {0} /* where the JSON goes. 2025-09-19: output size=19295, but
+           that can vary slightly from build to build, so a little
+           leeway is needed here. */;
   int n = 0, nChildren = 0, nStruct = 0
     /* output counters for figuring out where commas go */;
   char * zPos = &aBuffer[1] /* skip first byte for now to help protect
@@ -597,6 +593,9 @@ const char * sqlite3__wasm_enum_json(void){
     DefInt(SQLITE_DBCONFIG_TRUSTED_SCHEMA);
     DefInt(SQLITE_DBCONFIG_STMT_SCANSTATUS);
     DefInt(SQLITE_DBCONFIG_REVERSE_SCANORDER);
+    DefInt(SQLITE_DBCONFIG_ENABLE_ATTACH_CREATE);
+    DefInt(SQLITE_DBCONFIG_ENABLE_ATTACH_WRITE);
+    DefInt(SQLITE_DBCONFIG_ENABLE_COMMENTS);
     DefInt(SQLITE_DBCONFIG_MAX);
   } _DefGroup;
 
@@ -614,6 +613,7 @@ const char * sqlite3__wasm_enum_json(void){
     DefInt(SQLITE_DBSTATUS_DEFERRED_FKS);
     DefInt(SQLITE_DBSTATUS_CACHE_USED_SHARED);
     DefInt(SQLITE_DBSTATUS_CACHE_SPILL);
+    DefInt(SQLITE_DBSTATUS_TEMPBUF_SPILL);
     DefInt(SQLITE_DBSTATUS_MAX);
   } _DefGroup;
 
@@ -932,6 +932,7 @@ const char * sqlite3__wasm_enum_json(void){
     DefInt(SQLITE_INNOCUOUS);
     DefInt(SQLITE_SUBTYPE);
     DefInt(SQLITE_RESULT_SUBTYPE);
+    DefInt(SQLITE_SELFORDER1);
   } _DefGroup;
 
   DefGroup(version) {
@@ -978,7 +979,7 @@ const char * sqlite3__wasm_enum_json(void){
 #undef _DefGroup
 
   /*
-  ** Emit an array of "StructBinder" struct descripions, which look
+  ** Emit an array of "StructBinder" struct descriptions, which look
   ** like:
   **
   ** {
@@ -991,8 +992,8 @@ const char * sqlite3__wasm_enum_json(void){
   **   }
   ** }
   **
-  ** Detailed documentation for those bits are in the docs for the
-  ** Jaccwabyt JS-side component.
+  ** Detailed documentation for those bits are in the Jaccwabyt
+  ** JS-side component.
   */
 
   /** Macros for emitting StructBinder description. */
@@ -1029,8 +1030,8 @@ const char * sqlite3__wasm_enum_json(void){
       M(xDelete,           "i(ppi)");
       M(xAccess,           "i(ppip)");
       M(xFullPathname,     "i(ppip)");
-      M(xDlOpen,           "p(pp)");
-      M(xDlError,          "p(pip)");
+      M(xDlOpen,           "v(pp)");
+      M(xDlError,          "v(pip)");
       M(xDlSym,            "p()");
       M(xDlClose,          "v(pp)");
       M(xRandomness,       "i(pip)");
@@ -1083,7 +1084,6 @@ const char * sqlite3__wasm_enum_json(void){
     } _StructBinder;
 #undef CurrentStruct
 
-
 #if SQLITE_WASM_HAS_VTAB
 #define CurrentStruct sqlite3_vtab
     StructBinder {
@@ -1127,6 +1127,8 @@ const char * sqlite3__wasm_enum_json(void){
       M(xRollbackTo,    "i(pi)");
       // ^^^ v2. v3+ follows...
       M(xShadowName,    "i(s)");
+      // ^^^ v3. v4+ follows...
+      M(xIntegrity,     "i(pppip)");
     } _StructBinder;
 #undef CurrentStruct
 
@@ -1153,7 +1155,7 @@ const char * sqlite3__wasm_enum_json(void){
     { /* Validate that the above struct sizeof()s match
       ** expectations. We could improve upon this by
       ** checking the offsetof() for each member. */
-      const sqlite3_index_info siiCheck;
+      const sqlite3_index_info siiCheck = {0};
 #define IndexSzCheck(T,M)           \
       (sizeof(T) == sizeof(*siiCheck.M))
       if(!IndexSzCheck(sqlite3_index_constraint,aConstraint)
@@ -1415,7 +1417,7 @@ int sqlite3__wasm_db_serialize( sqlite3 *pDb, const char *zSchema,
 ** NULL), or nData is negative, SQLITE_MISUSE are returned.
 **
 ** On success, it creates a new file with the given name, populated
-** with the fist nData bytes of pData. If pData is NULL, the file is
+** with the first nData bytes of pData. If pData is NULL, the file is
 ** created and/or truncated to nData bytes.
 **
 ** Whether or not directory components of zFilename are created
@@ -1630,6 +1632,9 @@ int sqlite3__wasm_db_config_ip(sqlite3 *pDb, int op, int arg1, int* pArg2){
     case SQLITE_DBCONFIG_TRUSTED_SCHEMA:
     case SQLITE_DBCONFIG_STMT_SCANSTATUS:
     case SQLITE_DBCONFIG_REVERSE_SCANORDER:
+    case SQLITE_DBCONFIG_ENABLE_ATTACH_CREATE:
+    case SQLITE_DBCONFIG_ENABLE_ATTACH_WRITE:
+    case SQLITE_DBCONFIG_ENABLE_COMMENTS:
       return sqlite3_db_config(pDb, op, arg1, pArg2);
     default: return SQLITE_MISUSE;
   }
@@ -1771,7 +1776,7 @@ int sqlite3__wasm_init_wasmfs(const char *zMountPoint){
 SQLITE_WASM_EXPORT
 int sqlite3__wasm_init_wasmfs(const char *zUnused){
   //emscripten_console_warn("WASMFS OPFS is not compiled in.");
-  if(zUnused){/*unused*/}
+  (void)zUnused;
   return SQLITE_NOTFOUND;
 }
 #endif /* __EMSCRIPTEN__ && SQLITE_ENABLE_WASMFS */

@@ -63,6 +63,11 @@
 #include "sqliteInt.h"
 
 /*
+** Verify that the pParse->isCreate field is set
+*/
+#define ASSERT_IS_CREATE   assert(pParse->isCreate)
+
+/*
 ** Disable all error recovery processing in the parser push-down
 ** automaton.
 */
@@ -125,6 +130,10 @@ static void parserSyntaxError(Parse *pParse, Token *p){
 static void disableLookaside(Parse *pParse){
   sqlite3 *db = pParse->db;
   pParse->disableLookaside++;
+#ifdef SQLITE_DEBUG
+  pParse->isCreate = 1;
+#endif
+  memset(&pParse->u1.cr, 0, sizeof(pParse->u1.cr));
   DisableLookaside;
 }
 
@@ -197,7 +206,9 @@ cmd ::= create_table create_table_args.
 create_table ::= createkw temp(T) TABLE ifnotexists(E) nm(Y) dbnm(Z). {
    sqlite3StartTable(pParse,&Y,&Z,T,0,0,E);
 }
-createkw(A) ::= CREATE(A).  {disableLookaside(pParse);}
+createkw(A) ::= CREATE(A).  {
+  disableLookaside(pParse);
+}
 
 %type ifnotexists {int}
 ifnotexists(A) ::= .              {A = 0;}
@@ -312,7 +323,7 @@ columnname(A) ::= nm(A) typetoken(Y). {sqlite3AddColumn(pParse,A,Y);}
 //
 %token_class id  ID|INDEXED.
 
-// And "ids" is an identifer-or-string.
+// And "ids" is an identifier-or-string.
 //
 %token_class ids  ID|STRING.
 
@@ -373,7 +384,7 @@ scantok(A) ::= . {
 //
 carglist ::= carglist ccons.
 carglist ::= .
-ccons ::= CONSTRAINT nm(X).           {pParse->constraintName = X;}
+ccons ::= CONSTRAINT nm(X). {ASSERT_IS_CREATE; pParse->u1.cr.constraintName = X;}
 ccons ::= DEFAULT scantok(A) term(X).
                             {sqlite3AddDefaultValue(pParse,X,A.z,&A.z[A.n]);}
 ccons ::= DEFAULT LP(A) expr(X) RP(Z).
@@ -448,9 +459,9 @@ conslist_opt(A) ::= .                         {A.n = 0; A.z = 0;}
 conslist_opt(A) ::= COMMA(A) conslist.
 conslist ::= conslist tconscomma tcons.
 conslist ::= tcons.
-tconscomma ::= COMMA.            {pParse->constraintName.n = 0;}
+tconscomma ::= COMMA.          {ASSERT_IS_CREATE; pParse->u1.cr.constraintName.n = 0;}
 tconscomma ::= .
-tcons ::= CONSTRAINT nm(X).      {pParse->constraintName = X;}
+tcons ::= CONSTRAINT nm(X).    {ASSERT_IS_CREATE; pParse->u1.cr.constraintName = X;}
 tcons ::= PRIMARY KEY LP sortlist(X) autoinc(I) RP onconf(R).
                                  {sqlite3AddPrimaryKey(pParse,X,R,I,0);}
 tcons ::= UNIQUE LP sortlist(X) RP onconf(R).
@@ -606,8 +617,8 @@ selectnowith(A) ::= selectnowith(A) multiselect_op(Y) oneselect(Z).  {
   if( pRhs ){
     pRhs->op = (u8)Y;
     pRhs->pPrior = pLhs;
-    if( ALWAYS(pLhs) ) pLhs->selFlags &= ~SF_MultiValue;
-    pRhs->selFlags &= ~SF_MultiValue;
+    if( ALWAYS(pLhs) ) pLhs->selFlags &= ~(u32)SF_MultiValue;
+    pRhs->selFlags &= ~(u32)SF_MultiValue;
     if( Y!=TK_ALL ) pParse->hasCompound = 1;
   }else{
     sqlite3SelectDelete(pParse->db, pLhs);
@@ -827,7 +838,7 @@ joinop(X) ::= JOIN_KW(A) nm(B) JOIN.
 joinop(X) ::= JOIN_KW(A) nm(B) nm(C) JOIN.
                   {X = sqlite3JoinType(pParse,&A,&B,&C);/*X-overwrites-A*/}
 
-// There is a parsing abiguity in an upsert statement that uses a
+// There is a parsing ambiguity in an upsert statement that uses a
 // SELECT on the RHS of a the INSERT:
 //
 //      INSERT INTO tab SELECT * FROM aaa JOIN bbb ON CONFLICT ...
@@ -1208,7 +1219,7 @@ expr(A) ::= idj(X) LP STAR RP. {
   ** The purpose of this function is to generate an Expr node from the first syntax
   ** into a TK_FUNCTION node that looks like it came from the second syntax.
   **
-  ** Only functions that have the SQLITE_SELFORDER1 perperty are allowed to do this
+  ** Only functions that have the SQLITE_SELFORDER1 property are allowed to do this
   ** transformation.  Because DISTINCT is not allowed in the ordered-set aggregate
   ** syntax, an error is raised if DISTINCT is used.
   */
@@ -1418,12 +1429,21 @@ expr(A) ::= expr(A) between_op(N) expr(X) AND expr(Y). [BETWEEN] {
       **      expr1 IN ()
       **      expr1 NOT IN ()
       **
-      ** simplify to constants 0 (false) and 1 (true), respectively,
-      ** regardless of the value of expr1.
+      ** simplify to constants 0 (false) and 1 (true), respectively.
+      **
+      ** Except, do not apply this optimization if expr1 contains a function
+      ** because that function might be an aggregate (we don't know yet whether
+      ** it is or not) and if it is an aggregate, that could change the meaning
+      ** of the whole query.
       */
-      sqlite3ExprUnmapAndDelete(pParse, A);
-      A = sqlite3Expr(pParse->db, TK_STRING, N ? "true" : "false");
-      if( A ) sqlite3ExprIdToTrueFalse(A);
+      Expr *pB = sqlite3Expr(pParse->db, TK_STRING, N ? "true" : "false");
+      if( pB ) sqlite3ExprIdToTrueFalse(pB);
+      if( !ExprHasProperty(A, EP_HasFunc) ){
+        sqlite3ExprUnmapAndDelete(pParse, A);
+        A = pB;
+      }else{
+        A = sqlite3PExpr(pParse, N ? TK_OR : TK_AND, pB, A);
+      }
     }else{
       Expr *pRHS = Y->a[0].pExpr;
       if( Y->nExpr==1 && sqlite3ExprIsConstant(pParse,pRHS) && A->op!=TK_VECTOR ){
@@ -1659,6 +1679,10 @@ trigger_decl(A) ::= temp(T) TRIGGER ifnotexists(NOERR) nm(B) dbnm(Z)
                     ON fullname(E) foreach_clause when_clause(G). {
   sqlite3BeginTrigger(pParse, &B, &Z, C, D.a, D.b, E, G, T, NOERR);
   A = (Z.n==0?B:Z); /*A-overwrites-T*/
+#ifdef SQLITE_DEBUG
+  assert( pParse->isCreate ); /* Set by createkw reduce action */
+  pParse->isCreate = 0;       /* But, should not be set for CREATE TRIGGER */
+#endif
 }
 
 %type trigger_time {int}
@@ -1882,7 +1906,8 @@ wqlist(A) ::= wqlist(A) COMMA wqitem(X). {
 // These must be at the end of this file. Specifically, the rules that
 // introduce tokens WINDOW, OVER and FILTER must appear last. This causes 
 // the integer values assigned to these tokens to be larger than all other 
-// tokens that may be output by the tokenizer except TK_SPACE and TK_ILLEGAL.
+// tokens that may be output by the tokenizer except TK_SPACE, TK_COMMENT,
+// and TK_ILLEGAL.
 //
 %ifndef SQLITE_OMIT_WINDOWFUNC
 %type windowdefn_list {Window*}
@@ -2059,9 +2084,9 @@ term(A) ::= QNUMBER(X). {
 }
 
 /*
-** The TK_SPACE and TK_ILLEGAL tokens must be the last two tokens.  The
-** parser depends on this.  Those tokens are not used in any grammar rule.
-** They are only used by the tokenizer.  Declare them last so that they
-** are guaranteed to be the last two tokens
+** The TK_SPACE, TK_COMMENT, and TK_ILLEGAL tokens must be the last three
+** tokens.  The parser depends on this.  Those tokens are not used in any
+** grammar rule.  They are only used by the tokenizer.  Declare them last
+** so that they are guaranteed to be the last three.
 */
-%token SPACE ILLEGAL.
+%token SPACE COMMENT ILLEGAL.

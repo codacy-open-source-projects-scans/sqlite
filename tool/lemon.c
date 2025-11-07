@@ -1628,6 +1628,23 @@ static void handle_D_option(char *z){
   *z = 0;
 }
 
+/* This routine is called with the argument to each -U command-line option.
+** Omit a previously defined macro.
+*/
+static void handle_U_option(char *z){
+  int i;
+  for(i=0; i<nDefine; i++){
+    if( strcmp(azDefine[i],z)==0 ){
+      nDefine--;
+      if( i<nDefine ){
+        azDefine[i] = azDefine[nDefine];
+        bDefineUsed[i] = bDefineUsed[nDefine];
+      }
+      break;
+    }
+  }
+}
+
 /* Rember the name of the output directory 
 */
 static char *outputDir = NULL;
@@ -1754,6 +1771,7 @@ int main(int argc, char **argv){
                     "Generate the *.sql file describing the parser tables."},
     {OPT_FLAG, "x", (char*)&version, "Print the version number."},
     {OPT_FSTR, "T", (char*)handle_T_option, "Specify a template file."},
+    {OPT_FSTR, "U", (char*)handle_U_option, "Undefine a macro."},
     {OPT_FSTR, "W", 0, "Ignored.  (Placeholder for '-W' compiler options.)"},
     {OPT_FLAG,0,0,0}
   };
@@ -2005,10 +2023,10 @@ static char *msort(
     list = NEXT(list);
     NEXT(ep) = 0;
     for(i=0; i<LISTSIZE-1 && set[i]!=0; i++){
-      ep = merge(ep,set[i],cmp,offset);
+      ep = merge(set[i],ep,cmp,offset);
       set[i] = 0;
     }
-    set[i] = ep;
+    set[i] = merge(set[i],ep,cmp,offset);
   }
   ep = 0;
   for(i=0; i<LISTSIZE; i++) if( set[i] ) ep = merge(set[i],ep,cmp,offset);
@@ -3677,7 +3695,7 @@ PRIVATE int compute_action(struct lemon *lemp, struct action *ap)
   switch( ap->type ){
     case SHIFT:  act = ap->x.stp->statenum;                        break;
     case SHIFTREDUCE: {
-      /* Since a SHIFT is inherient after a prior REDUCE, convert any
+      /* Since a SHIFT is inherent after a prior REDUCE, convert any
       ** SHIFTREDUCE action with a nonterminal on the LHS into a simple
       ** REDUCE action: */
       if( ap->sp->index>=lemp->nterminal
@@ -4017,10 +4035,10 @@ PRIVATE int translate_code(struct lemon *lemp, struct rule *rp){
     }
   }
   if( lhsdirect ){
-    sprintf(zLhs, "yymsp[%d].minor.yy%d",1-rp->nrhs,rp->lhs->dtnum);
+    lemon_sprintf(zLhs, "yymsp[%d].minor.yy%d",1-rp->nrhs,rp->lhs->dtnum);
   }else{
     rc = 1;
-    sprintf(zLhs, "yylhsminor.yy%d",rp->lhs->dtnum);
+    lemon_sprintf(zLhs, "yylhsminor.yy%d",rp->lhs->dtnum);
   }
 
   append_str(0,0,0,0);
@@ -5907,7 +5925,7 @@ struct state **State_arrayof(void)
 PRIVATE unsigned confighash(struct config *a)
 {
   unsigned h=0;
-  h = h*571 + a->rp->index*37 + a->dot;
+  h = a->rp->index*37 + a->dot;
   return h;
 }
 
