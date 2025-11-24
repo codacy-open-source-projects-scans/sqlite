@@ -14,6 +14,9 @@
 */
 #ifndef SQLITE_QRF_H
 #define SQLITE_QRF_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <stdlib.h>
 #include "sqlite3.h"
 
@@ -34,6 +37,7 @@ struct sqlite3_qrf_spec {
   unsigned char bTextNull;    /* Apply eText encoding to zNull[] */
   unsigned char eDfltAlign;   /* Default alignment, no covered by aAlignment */
   unsigned char eTitleAlign;  /* Alignment for column headers */
+  unsigned char bSplitColumn; /* Wrap single-column output into many columns */
   short int nWrap;            /* Wrap columns wider than this */
   short int nScreenWidth;     /* Maximum overall table width */
   short int nLineLimit;       /* Maximum number of lines for any row */
@@ -179,6 +183,7 @@ int sqlite3_format_query_result(
 int sqlite3_qrf_wcwidth(int c);
 
 
-
-
+#ifdef __cplusplus
+}
+#endif
 #endif /* !defined(SQLITE_QRF_H) */

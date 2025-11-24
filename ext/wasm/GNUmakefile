@@ -910,6 +910,7 @@ sqlite3-api.jses += $(dir.api)/sqlite3-vfs-helper.c-pp.js
 ifeq (0,$(wasm-bare-bones))
   sqlite3-api.jses += $(dir.api)/sqlite3-vtab-helper.c-pp.js
 endif
+sqlite3-api.jses += $(dir.api)/sqlite3-vfs-kvvfs.c-pp.js
 sqlite3-api.jses += $(dir.api)/sqlite3-vfs-opfs.c-pp.js
 sqlite3-api.jses += $(dir.api)/sqlite3-vfs-opfs-sahpool.c-pp.js
 
@@ -997,7 +998,8 @@ endif
 ########################################################################
 
 EXPORTED_FUNCTIONS.fiddle = $(dir.tmp)/EXPORTED_FUNCTIONS.fiddle
-$(EXPORTED_FUNCTIONS.fiddle): $(EXPORTED_FUNCTIONS.api.in) $(MAKEFILE_LIST)
+$(EXPORTED_FUNCTIONS.fiddle): $(EXPORTED_FUNCTIONS.api.in) \
+ $(MAKEFILE_LIST) $(bin.c-pp)
 	@$(call b.mkdir@)
 	@$(call b.c-pp.shcmd,filter,$(EXPORTED_FUNCTIONS.api.in),\
       $@,$(EXPORTED_FUNCTIONS.c-pp.flags) -Dfiddle)
