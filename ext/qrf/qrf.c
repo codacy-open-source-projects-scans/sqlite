@@ -983,6 +983,11 @@ static void qrfRenderValue(Qrf *p, sqlite3_str *pOut, int iCol){
           }
           break;
         }
+        case QRF_BLOB_Size: {
+          int nBlob = sqlite3_column_bytes(p->pStmt,iCol);
+          sqlite3_str_appendf(pOut, "(%d-byte blob)", nBlob);
+          break;
+        }
         default: {
           const char *zTxt = (const char*)sqlite3_column_text(p->pStmt,iCol);
           qrfEncodeText(p, pOut, zTxt);
@@ -991,11 +996,7 @@ static void qrfRenderValue(Qrf *p, sqlite3_str *pOut, int iCol){
       break;
     }
     case SQLITE_NULL: {
-      if( p->spec.bTextNull==QRF_Yes ){
-        qrfEncodeText(p, pOut, p->spec.zNull);
-      }else{
-        sqlite3_str_appendall(pOut, p->spec.zNull);
-      }
+      sqlite3_str_appendall(pOut, p->spec.zNull);
       break;
     }
     case SQLITE_TEXT: {
@@ -1831,17 +1832,19 @@ static void qrfColumnar(Qrf *p){
       }
       qrfRowSeparator(p->pOut, &data, '+');
       break;
-    case QRF_STYLE_Column:
+    case QRF_STYLE_Column: {
+      static const char zSpace[] = "     ";
       rowStart = "";
       if( data.nMargin<2 ){
         colSep = " ";
       }else if( data.nMargin<=5 ){
-        colSep = "     " + (5-data.nMargin);
+        colSep = &zSpace[5-data.nMargin];
       }else{
-        colSep = "     ";
+        colSep = zSpace;
       }
       rowSep = "\n";
       break;
+    }
     default:  /*case QRF_STYLE_Markdown:*/
       if( data.nMargin ){
         rowStart = "| ";
@@ -2418,6 +2421,11 @@ static void qrfInitialize(
   if( p->mxWidth<=0 ) p->mxWidth = QRF_MAX_WIDTH;
   p->mxHeight = p->spec.nLineLimit;
   if( p->mxHeight<=0 ) p->mxHeight = 2147483647;
+  if( p->spec.eStyle>QRF_STYLE_Table ) p->spec.eStyle = QRF_Auto;
+  if( p->spec.eEsc>QRF_ESC_Symbol ) p->spec.eEsc = QRF_Auto;
+  if( p->spec.eText>QRF_TEXT_Json ) p->spec.eText = QRF_Auto;
+  if( p->spec.eTitle>QRF_TEXT_Json ) p->spec.eTitle = QRF_Auto;
+  if( p->spec.eBlob>QRF_BLOB_Size ) p->spec.eBlob = QRF_Auto;
 qrf_reinit:
   switch( p->spec.eStyle ){
     case QRF_Auto: {
@@ -2436,7 +2444,6 @@ qrf_reinit:
     case QRF_STYLE_JObject:
     case QRF_STYLE_Json: {
       p->spec.eText = QRF_TEXT_Json;
-      p->spec.eBlob = QRF_BLOB_Json;
       p->spec.zNull = "null";
       break;
     }
@@ -2447,7 +2454,6 @@ qrf_reinit:
     }
     case QRF_STYLE_Insert: {
       p->spec.eText = QRF_TEXT_Sql;
-      p->spec.eBlob = QRF_BLOB_Sql;
       p->spec.zNull = "NULL";
       if( p->spec.zTableName==0 || p->spec.zTableName[0]==0 ){
         p->spec.zTableName = "tab";
@@ -2457,7 +2463,6 @@ qrf_reinit:
     case QRF_STYLE_Csv: {
       p->spec.eStyle = QRF_STYLE_List;
       p->spec.eText = QRF_TEXT_Csv;
-      p->spec.eBlob = QRF_BLOB_Text;
       p->spec.zColumnSep = ",";
       p->spec.zRowSep = "\r\n";
       p->spec.zNull = "";
@@ -2465,7 +2470,6 @@ qrf_reinit:
     }
     case QRF_STYLE_Quote: {
       p->spec.eText = QRF_TEXT_Sql;
-      p->spec.eBlob = QRF_BLOB_Sql;
       p->spec.zNull = "NULL";
       p->spec.zColumnSep = ",";
       p->spec.zRowSep = "\n";

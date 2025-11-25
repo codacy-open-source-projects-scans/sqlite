@@ -2062,7 +2062,6 @@ static void DbHookCmd(
 **     -blob ("auto"|"text"|"sql"|...)         How to escape BLOB values
 **     -wordwrap ("auto"|"off"|"on")           Try to wrap at word boundry?
 **     -textjsonb ("auto"|"off"|"on")          Auto-convert JSONB to text?
-**     -textnull ("auto"|"off"|"on")           Use text encoding for -null.
 **     -splitcolumn ("auto"|"off"|"on")        Enable split-column mode
 **     -defaultalign ("auto"|"left"|...)       Default alignment
 **     -titalalign ("auto"|"left"|"right"|...) Default column name alignment
@@ -2089,7 +2088,6 @@ static void DbHookCmd(
 **     -blob             eBlob
 **     -wordwrap         bWordWrap
 **     -textjsonb        bTextJsonb
-**     -textnull         bTestNull
 **     -splitcolumn      bSplitColumn
 **     -defaultalign     eDfltAlign
 **     -titlealign       eTitleAlign
@@ -2219,11 +2217,13 @@ static int dbQrf(SqliteDb *pDb, int objc, Tcl_Obj *const*objv){
     }else if( strcmp(zArg,"-blob")==0 ){
       static const char *azBlob[] = {
         "auto",             "hex",              "json",
-        "tcl",              "text",             "sql",      0
+        "tcl",              "text",             "sql",
+        "size",             0
       };
       static unsigned char aBlobMap[] = {
         QRF_BLOB_Auto,      QRF_BLOB_Hex,       QRF_BLOB_Json,
-        QRF_BLOB_Tcl,       QRF_BLOB_Text,      QRF_BLOB_Sql
+        QRF_BLOB_Tcl,       QRF_BLOB_Text,      QRF_BLOB_Sql,
+        QRF_BLOB_Size
       };
       int blob;
       rc = Tcl_GetIndexFromObj(pDb->interp, objv[i+1], azBlob,
@@ -2239,7 +2239,6 @@ static int dbQrf(SqliteDb *pDb, int objc, Tcl_Obj *const*objv){
       qrf.bWordWrap = aBoolMap[v];
       i++;
     }else if( strcmp(zArg,"-textjsonb")==0
-           || strcmp(zArg,"-textnull")==0
            || strcmp(zArg,"-splitcolumn")==0
     ){
       int v = 0;
@@ -2248,8 +2247,6 @@ static int dbQrf(SqliteDb *pDb, int objc, Tcl_Obj *const*objv){
       if( rc ) goto format_failed;
       if( zArg[5]=='j' ){
         qrf.bTextJsonb = aBoolMap[v];
-      }else if( zArg[5]=='n' ){
-        qrf.bTextNull = aBoolMap[v];
       }else{
         qrf.bSplitColumn = aBoolMap[v];
       }
