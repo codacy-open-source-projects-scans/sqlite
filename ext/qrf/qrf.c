@@ -1266,36 +1266,6 @@ static void qrfAppendWithTabs(
 }    
 
 /*
-** Output horizontally justified text into pOut.  The text is the
-** first nVal bytes of zVal.  Include nWS bytes of whitespace, either
-** split between both sides, or on the left, or on the right, depending
-** on eAlign.
-*/
-static void qrfPrintAligned(
-  sqlite3_str *pOut,       /* Append text here */
-  const char *zVal,        /* Text to append */
-  int nVal,                /* Use only the first nVal bytes of zVal[] */
-  int nWS,                 /* Whitespace for horizonal alignment */
-  unsigned char eAlign     /* Alignment type */
-){
-  eAlign &= QRF_ALIGN_HMASK;
-  if( eAlign==QRF_ALIGN_Center ){
-    /* Center the text */
-    sqlite3_str_appendchar(pOut, nWS/2, ' ');
-    qrfAppendWithTabs(pOut, zVal, nVal);
-    sqlite3_str_appendchar(pOut, nWS - nWS/2, ' ');
-  }else if( eAlign==QRF_ALIGN_Right){
-    /* Right justify the text */
-    sqlite3_str_appendchar(pOut, nWS, ' ');
-    qrfAppendWithTabs(pOut, zVal, nVal);
-  }else{
-    /* Left justify the next */
-    qrfAppendWithTabs(pOut, zVal, nVal);
-    sqlite3_str_appendchar(pOut, nWS, ' ');
-  }
-}
-
-/*
 ** GCC does not define the offsetof() macro so we'll have to do it
 ** ourselves.
 */
@@ -1318,14 +1288,46 @@ struct qrfColData {
   sqlite3_int64 n;         /* Number of cells.  nCol*nRow */
   char **az;               /* Content of all cells */
   int *aiWth;              /* Width of each cell */
+  unsigned char *abNum;    /* True for each numeric cell */
   struct qrfPerCol {       /* Per-column data */
     char *z;                 /* Cache of text for current row */
     int w;                   /* Computed width of this column */
     int mxW;                 /* Maximum natural (unwrapped) width */
     unsigned char e;         /* Alignment */
     unsigned char fx;        /* Width is fixed */
+    unsigned char bNum;      /* True if is numeric */
   } *a;                    /* One per column */
 };
+
+/*
+** Output horizontally justified text into pOut.  The text is the
+** first nVal bytes of zVal.  Include nWS bytes of whitespace, either
+** split between both sides, or on the left, or on the right, depending
+** on eAlign.
+*/
+static void qrfPrintAligned(
+  sqlite3_str *pOut,       /* Append text here */
+  struct qrfPerCol *pCol,  /* Information about the text to print */
+  int nVal,                /* Use only the first nVal bytes of zVal[] */
+  int nWS                 /* Whitespace for horizonal alignment */
+){
+  unsigned char eAlign = pCol->e & QRF_ALIGN_HMASK;
+  if( eAlign==QRF_Auto && pCol->bNum ) eAlign = QRF_ALIGN_Right;
+  if( eAlign==QRF_ALIGN_Center ){
+    /* Center the text */
+    sqlite3_str_appendchar(pOut, nWS/2, ' ');
+    qrfAppendWithTabs(pOut, pCol->z, nVal);
+    sqlite3_str_appendchar(pOut, nWS - nWS/2, ' ');
+  }else if( eAlign==QRF_ALIGN_Right ){
+    /* Right justify the text */
+    sqlite3_str_appendchar(pOut, nWS, ' ');
+    qrfAppendWithTabs(pOut, pCol->z, nVal);
+  }else{
+    /* Left justify the text */
+    qrfAppendWithTabs(pOut, pCol->z, nVal);
+    sqlite3_str_appendchar(pOut, nWS, ' ');
+  }
+}
 
 /*
 ** Free all the memory allocates in the qrfColData object
@@ -1335,6 +1337,7 @@ static void qrfColDataFree(qrfColData *p){
   for(i=0; i<p->n; i++) sqlite3_free(p->az[i]);
   sqlite3_free(p->az);
   sqlite3_free(p->aiWth);
+  sqlite3_free(p->abNum);
   sqlite3_free(p->a);
   memset(p, 0, sizeof(*p));
 }
@@ -1346,6 +1349,7 @@ static void qrfColDataFree(qrfColData *p){
 static int qrfColDataEnlarge(qrfColData *p){
   char **azData;
   int *aiWth;
+  unsigned char *abNum;
   p->nAlloc = 2*p->nAlloc + 10*p->nCol;
   azData = sqlite3_realloc64(p->az, p->nAlloc*sizeof(char*));
   if( azData==0 ){
@@ -1361,6 +1365,13 @@ static int qrfColDataEnlarge(qrfColData *p){
     return 1;
   }
   p->aiWth = aiWth;
+  abNum = sqlite3_realloc64(p->abNum, p->nAlloc);
+  if( abNum==0 ){
+    qrfOom(p->p);
+    qrfColDataFree(p);
+    return 1;
+  }
+  p->abNum = abNum;
   return 0;
 }
 
@@ -1370,13 +1381,18 @@ static int qrfColDataEnlarge(qrfColData *p){
 static void qrfRowSeparator(sqlite3_str *pOut, qrfColData *p, char cSep){
   int i;
   if( p->nCol>0 ){
-    sqlite3_str_append(pOut, &cSep, 1);
+    int useBorder = p->p->spec.bBorder!=QRF_No;
+    if( useBorder ){
+      sqlite3_str_append(pOut, &cSep, 1);
+    }
     sqlite3_str_appendchar(pOut, p->a[0].w+p->nMargin, '-');
     for(i=1; i<p->nCol; i++){
       sqlite3_str_append(pOut, &cSep, 1);
       sqlite3_str_appendchar(pOut, p->a[i].w+p->nMargin, '-');
     }
-    sqlite3_str_append(pOut, &cSep, 1);
+    if( useBorder ){
+      sqlite3_str_append(pOut, &cSep, 1);
+    }
   }
   sqlite3_str_append(pOut, "\n", 1);
 }
@@ -1434,13 +1450,18 @@ static void qrfBoxSeparator(
 ){
   int i;
   if( p->nCol>0 ){
-    sqlite3_str_appendall(pOut, zSep1);
+    int useBorder = p->p->spec.bBorder!=QRF_No;
+    if( useBorder ){
+      sqlite3_str_appendall(pOut, zSep1);
+    }
     qrfBoxLine(pOut, p->a[0].w+p->nMargin);
     for(i=1; i<p->nCol; i++){
       sqlite3_str_appendall(pOut, zSep2);
       qrfBoxLine(pOut, p->a[i].w+p->nMargin);
     }
-    sqlite3_str_appendall(pOut, zSep3);
+    if( useBorder ){
+      sqlite3_str_appendall(pOut, zSep3);
+    }
   }
   sqlite3_str_append(pOut, "\n", 1);
 }
@@ -1608,6 +1629,7 @@ static void qrfRestrictScreenWidth(qrfColData *pData, Qrf *p){
     sepW = pData->nCol*2 - 2;
   }else{
     sepW = pData->nCol*3 + 1;
+    if( p->spec.bBorder==QRF_No ) sepW -= 2;
   }
   nCol = pData->nCol;
   for(i=sumW=0; i<nCol; i++) sumW += pData->a[i].w;
@@ -1619,6 +1641,7 @@ static void qrfRestrictScreenWidth(qrfColData *pData, Qrf *p){
     sepW = pData->nCol - 1;
   }else{
     sepW = pData->nCol + 1;
+    if( p->spec.bBorder==QRF_No ) sepW -= 2;
   }
   targetW = p->spec.nScreenWidth - sepW;
 
@@ -1691,6 +1714,7 @@ static void qrfColumnar(Qrf *p){
   /* Initialize the data container */
   memset(&data, 0, sizeof(data));
   data.nCol = p->nCol;
+  data.p = p;
   data.a = sqlite3_malloc64( nColumn*sizeof(struct qrfPerCol) );
   if( data.a==0 ){
     qrfOom(p);
@@ -1704,6 +1728,7 @@ static void qrfColumnar(Qrf *p){
   if( p->spec.bTitles==QRF_Yes ){
     unsigned char saved_eText = p->spec.eText;
     p->spec.eText = p->spec.eTitle;
+    memset(data.abNum, 0, nColumn);
     for(i=0; i<nColumn; i++){
       const char *z = (const char*)sqlite3_column_name(p->pStmt,i);
       int nNL = 0;
@@ -1728,10 +1753,12 @@ static void qrfColumnar(Qrf *p){
       char *z;
       int nNL = 0;
       int n, w;
+      int eType = sqlite3_column_type(p->pStmt,i);
       pStr = sqlite3_str_new(p->db);
       qrfRenderValue(p, pStr, i);
       n = sqlite3_str_length(pStr);
       z = data.az[data.n] = sqlite3_str_finish(pStr);
+      data.abNum[data.n] = eType==SQLITE_INTEGER || eType==SQLITE_FLOAT;
       data.aiWth[data.n] = w = qrfDisplayWidth(z, n, &nNL);
       data.n++;
       if( w>data.a[i].mxW ) data.a[i].mxW = w;
@@ -1821,7 +1848,12 @@ static void qrfColumnar(Qrf *p){
         colSep = BOX_13;
         rowSep = BOX_13 "\n";
       }
-      qrfBoxSeparator(p->pOut, &data, BOX_23, BOX_234, BOX_34);
+      if( p->spec.bBorder==QRF_No){
+        rowStart += 3;
+        rowSep = "\n";
+      }else{
+        qrfBoxSeparator(p->pOut, &data, BOX_23, BOX_234, BOX_34);
+      }
       break;
     case QRF_STYLE_Table:
       if( data.nMargin ){
@@ -1833,7 +1865,12 @@ static void qrfColumnar(Qrf *p){
         colSep = "|";
         rowSep = "|\n";
       }
-      qrfRowSeparator(p->pOut, &data, '+');
+      if( p->spec.bBorder==QRF_No ){
+        rowStart += 1;
+        rowSep = "\n";
+      }else{
+        qrfRowSeparator(p->pOut, &data, '+');
+      }
       break;
     case QRF_STYLE_Column: {
       static const char zSpace[] = "     ";
@@ -1865,7 +1902,15 @@ static void qrfColumnar(Qrf *p){
   szColSep = (int)strlen(colSep);
 
   bWW = (p->spec.bWordWrap==QRF_Yes && data.bMultiRow);
-  bRTrim = (p->spec.eStyle==QRF_STYLE_Column);
+  if( p->spec.eStyle==QRF_STYLE_Column
+   || (p->spec.bBorder==QRF_No
+       && (p->spec.eStyle==QRF_STYLE_Box || p->spec.eStyle==QRF_STYLE_Table)
+      )
+  ){
+    bRTrim = 1;
+  }else{
+    bRTrim = 0;
+  }
   for(i=0; i<data.n; i+=nColumn){
     int bMore;
     int nRow = 0;
@@ -1874,7 +1919,10 @@ static void qrfColumnar(Qrf *p){
     ** (if there is a title line) or a row in the body of the table.
     ** The column number will be j.  The row number is i/nColumn.
     */
-    for(j=0; j<nColumn; j++){ data.a[j].z = data.az[i+j]; }
+    for(j=0; j<nColumn; j++){
+      data.a[j].z = data.az[i+j];
+      data.a[j].bNum = data.abNum[i+j];
+    }
     do{
       sqlite3_str_append(p->pOut, rowStart, szRowStart);
       bMore = 0;
@@ -1885,7 +1933,7 @@ static void qrfColumnar(Qrf *p){
         int nWS;
         qrfWrapLine(data.a[j].z, data.a[j].w, bWW, &nThis, &nWide, &iNext);
         nWS = data.a[j].w - nWide;
-        qrfPrintAligned(p->pOut, data.a[j].z, nThis, nWS, data.a[j].e);
+        qrfPrintAligned(p->pOut, &data.a[j], nThis, nWS);
         data.a[j].z += iNext;
         if( data.a[j].z[0]!=0 ){
           bMore = 1;
@@ -1907,7 +1955,8 @@ static void qrfColumnar(Qrf *p){
         }else{
           int nE = 3;
           if( nE>data.a[j].w ) nE = data.a[j].w;
-          qrfPrintAligned(p->pOut, "...", nE, data.a[j].w-nE, data.a[j].e);
+          data.a[j].z = "...";
+          qrfPrintAligned(p->pOut, &data.a[j], nE, data.a[j].w-nE);
         }
         if( j<nColumn-1 ){
           sqlite3_str_append(p->pOut, colSep, szColSep);
@@ -1968,13 +2017,15 @@ static void qrfColumnar(Qrf *p){
   }
 
   /* Draw the line across the bottom of the table */
-  switch( p->spec.eStyle ){
-    case QRF_STYLE_Box:
-      qrfBoxSeparator(p->pOut, &data, BOX_12, BOX_124, BOX_14);
-      break;
-    case QRF_STYLE_Table:
-      qrfRowSeparator(p->pOut, &data, '+');
-      break;
+  if( p->spec.bBorder!=QRF_No ){
+    switch( p->spec.eStyle ){
+      case QRF_STYLE_Box:
+        qrfBoxSeparator(p->pOut, &data, BOX_12, BOX_124, BOX_14);
+        break;
+      case QRF_STYLE_Table:
+        qrfRowSeparator(p->pOut, &data, '+');
+        break;
+    }
   }
   qrfWrite(p);
 

@@ -19,10 +19,10 @@ that can be incorporated and reused by other applications.
 
 ## 1.0 Overview Of Operation
 
-Suppose `pStmt` is a pointer to an SQLite prepared statement
-(a pointer to an `sqlite3_stmt` object) that has been reset and
-bound and is ready to run.  Then to format the output from this
-prepared statement, use code similar to the following:
+Suppose variable `sqlite3_stmt *pStmt` is a pointer to an SQLite
+prepared statement that has been reset and bound and is ready to run.
+Then to format the output from this prepared statement, use code
+similar to the following:
 
 > ~~~
 sqlite3_qrf_spec spec;  /* Format specification */
@@ -41,13 +41,54 @@ if( rc ){
   sqlite3_free(zErrMsg);              /* Free the error message text */
 }else{
   printf("%s", zResult);              /* Report the results */
-  sqlite3_free(zResult);              /* Free memory used to hold results */
 }
+sqlite3_free(zResult);              /* Free memory used to hold results */
 ~~~
 
 The `sqlite3_qrf_spec` object describes the desired output format
 and where to send the generated output. Most of the work in using
 the QRF involves filling out the sqlite3_qrf_spec.
+
+### 1.1 Using QRF with SQL text
+
+If you start with SQL text instead of an sqlite3_stmt pointer, and
+especially if the SQL text might comprise two or more statements, then
+the SQL text needs to be converted into sqlite3_stmt objects separately.
+If the original SQL text is in a variable `const char *zSql` and the
+database connection is in variable `sqlite3 *db`, then code
+similar to the following should work:
+
+> ~~~
+sqlite3_qrf_spec spec;  /* Format specification */
+char *zErrMsg;          /* Text error message (optional) */
+char *zResult = 0;      /* Formatted output written here */
+sqlite3_stmt *pStmt;    /* Next prepared statement */
+int rc;                 /* Result code */
+
+memset(&spec, 0, sizeof(spec));       /* Initialize the spec */
+spec.iVersion = 1;                    /* Version number must be 1 */
+spec.pzOutput = &zResult;             /* Write results in variable zResult */
+/* Optionally fill in other settings in spec here, as needed */
+zErrMsg = 0;                          /* Not required; just being pedantic */
+while( zSql && zSql[0] ){
+  pStmt = 0;                          /* Not required; just being pedantic */
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, &zSql);
+  if( rc!=SQLITE_OK ){
+    printf("Error: %s\n", sqlite3_errmsg(db));
+  }else{
+    rc = sqlite3_format_query_result(pStmt, &spec, &zErrMsg); /* Get results */
+    if( rc ){
+      printf("Error (%d): %s\n", rc, zErrMsg);  /* Report an error */
+      sqlite3_free(zErrMsg);              /* Free the error message text */
+    }else{
+      printf("%s", zResult);              /* Report the results */
+      sqlite3_free(zResult);              /* Free memory used to hold results */
+      zResult = 0;
+    }
+  }
+  sqlite3_finalize(pStmt);
+}
+~~~
 
 ## 2.0 The `sqlite3_qrf_spec` object
 
@@ -75,6 +116,7 @@ struct sqlite3_qrf_spec {
   unsigned char eDfltAlign;   /* Default alignment, no covered by aAlignment */
   unsigned char eTitleAlign;  /* Alignment for column headers */
   unsigned char bSplitColumn; /* Wrap single-column output into many columns */
+  unsigned char bBorder;      /* Show outer border in Box and Table styles */
   short int nWrap;            /* Wrap columns wider than this */
   short int nScreenWidth;     /* Maximum overall table width */
   short int nLineLimit;       /* Maximum number of lines for any row */
@@ -464,8 +506,9 @@ entry for that column takes precedence.  If either the horizontal
 or vertical alignment has an "auto" value for that column or if
 a column is beyond the first nAlign entries, then eDfltAlign
 is used as a backup.  If neither aAlign\[\] nor eDfltAlign
-specify a horizontal alignment, then values are left-aligned
-(QRF_ALIGN_Left).  If neither aAlign\[\] nor eDfltAlign
+specify a horizontal alignment, then values are right-aligned
+(QRF_ALIGN_Right) if they are numeric and left-aligned
+(QRF_ALIGN_Left) otherwise.  If neither aAlign\[\] nor eDfltAlign
 specify a vertical alignment, then values are top-aligned
 (QRF_ALIGN_Top).
 
@@ -587,8 +630,12 @@ to draw the grid. The **Column** arranges the results in neat columns
 but does not draw in column or row separator, except that it does draw
 lines horizontal lines using "`-`" characters to separate the column names
 from the data below.  This is very similar to default output styling in
-psql.  The **Markdown** renders its result in the
-Markdown table format.
+psql.  The **Markdown** renders its result in the Markdown table format.
+
+The **Box** and **Table** styles normally have a border that surrounds
+the entire result.  However, if sqlite3_qrf_spec.bBorder is QRF_No, then
+that border is omitted, saving a little space both horizontally and
+vertically.
 
 #### 4.2.1 Split Column Mode
 
