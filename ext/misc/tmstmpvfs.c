@@ -21,10 +21,10 @@
 **         $(DATABASE)-tmstmp/$(TIME)-$(PID)-$(ID)
 **
 ** Log files are only generated if directory $(DATABASE)-tmstmp exists.
-** The name of each log file is the current unix-epoch time in millisecond,
+** The name of each log file is the current ISO8601 time in milliseconds,
 ** the process ID, and a random 32-bit value (to disambiguate multiple
-** connections from the same process) separated by spaces.  The log file
-** contains one 16-byte record for various events, such as opening or close
+** connections from the same process) separated by dashes.  The log file
+** contains 16-bytes records for various events, such as opening or close
 ** of the database or WAL file, writes to the WAL file, checkpoints, and
 ** similar.   The logfile is only generated if the connection attempts to
 ** modify the database.  There is a separate log file for each open database
@@ -133,9 +133,9 @@
 **
 **         $(TIME)-$(PID)-$(RANDOM)
 **
-** Where TIME is the number of milliseconds since 1970, PID is the process
-** ID, and RANDOM is a 32-bit random number.  All values are expressed
-** in hexadecimal.
+** Where TIME is an ISO 8601 date in milliseconds with no punctuation,
+** PID is the process ID, and RANDOM is a 32-bit random number expressed
+** as hexadecimal.
 **
 ** The log consists of 16-byte records.  Each record consists of five
 ** unsigned integers:
@@ -144,9 +144,8 @@
 **     op  a1  ts   a2  a3
 **
 ** The meanings of the a1-a3 values depend on op.  ts is the timestamp
-** in milliseconds since 1970-01-01.  (6 bytes is sufficient for timestamps
-** for almost 9000 years.) Opcodes are defined by the ELOG_* #defines
-** below.
+** in milliseconds since the unix epoch (1970-01-01 00:00:00).
+** Opcodes are defined by the ELOG_* #defines below.
 **
 **   ELOG_OPEN_DB         "Open a connection to the database file"
 **                        op = 0x01
@@ -377,6 +376,7 @@ static const sqlite3_io_methods tmstmp_io_methods = {
 static void tmstmpPutTS(TmstmpFile *p, unsigned char *aOut){
   sqlite3_uint64 tm = 0;
   p->pSubVfs->xCurrentTimeInt64(p->pSubVfs, (sqlite3_int64*)&tm);
+  tm -= 210866760000000LL;
   aOut[0] = (tm>>40)&0xff;
   aOut[1] = (tm>>32)&0xff;
   aOut[2] = (tm>>24)&0xff;
@@ -546,7 +546,7 @@ static int tmstmpWrite(
     }
   }else if( p->inCkpt ){
     assert( p->pgsz>0 );
-    tmstmpEvent(p, ELOG_CKPT_PAGE, 0, iOfst/p->pgsz, 0);
+    tmstmpEvent(p, ELOG_CKPT_PAGE, 0, (iOfst/p->pgsz)+1, 0);
   }else if( p->pPartner==0 ){
     /* Writing into a database in rollback mode */
     unsigned char *s = (unsigned char*)zBuf+iAmt-TMSTMP_RESERVE;
@@ -616,34 +616,34 @@ static int tmstmpFileControl(sqlite3_file *pFile, int op, void *pArg){
   TmstmpFile *p = (TmstmpFile*)pFile;
   pFile = ORIGFILE(pFile);
   rc = pFile->pMethods->xFileControl(pFile, op, pArg);
-  if( rc==SQLITE_OK ){
-    switch( op ){
-      case SQLITE_FCNTL_VFSNAME: {
-        if( p->hasCorrectReserve ){
-          *(char**)pArg = sqlite3_mprintf("tmstmp/%z", *(char**)pArg);
-        }
-        break;
+  switch( op ){
+    case SQLITE_FCNTL_VFSNAME: {
+      if( p->hasCorrectReserve && rc==SQLITE_OK ){
+        *(char**)pArg = sqlite3_mprintf("tmstmp/%z", *(char**)pArg);
       }
-      case SQLITE_FCNTL_CKPT_START: {
-        p->inCkpt = 1;
-        assert( p->isDb );
-        assert( p->pPartner!=0 );
-        p->pPartner->inCkpt = 1;
-        if( p->hasCorrectReserve ){
-          tmstmpEvent(p, ELOG_CKPT_START, 0, 0, 0);
-        }
-        break;
+      break;
+    }
+    case SQLITE_FCNTL_CKPT_START: {
+      p->inCkpt = 1;
+      assert( p->isDb );
+      assert( p->pPartner!=0 );
+      p->pPartner->inCkpt = 1;
+      if( p->hasCorrectReserve ){
+        tmstmpEvent(p, ELOG_CKPT_START, 0, 0, 0);
       }
-      case SQLITE_FCNTL_CKPT_DONE: {
-        p->inCkpt = 0;
-        assert( p->isDb );
-        assert( p->pPartner!=0 );
-        p->pPartner->inCkpt = 0;
-        if( p->hasCorrectReserve ){
-          tmstmpEvent(p, ELOG_CKPT_DONE, 0, 0, 0);
-        }
-        break;
+      rc = SQLITE_OK;
+      break;
+    }
+    case SQLITE_FCNTL_CKPT_DONE: {
+      p->inCkpt = 0;
+      assert( p->isDb );
+      assert( p->pPartner!=0 );
+      p->pPartner->inCkpt = 0;
+      if( p->hasCorrectReserve ){
+        tmstmpEvent(p, ELOG_CKPT_DONE, 0, 0, 0);
       }
+      rc = SQLITE_OK;
+      break;
     }
   }
   return rc;
@@ -761,11 +761,27 @@ static int tmstmpOpen(
     p->pPartner = pDb;
     pDb->pPartner = p;
   }else{
-    sqlite3_uint64 r1;
     u32 r2;
     u32 pid;
     TmstmpLog *pLog;
-
+    sqlite3_uint64 r1;         /* Milliseconds since 1970-01-01 */
+    sqlite3_uint64 days;       /* Days since 1970-01-01 */
+    sqlite3_uint64 sod;        /* Start of date specified by ms */
+    sqlite3_uint64 z;          /* Days since 0000-03-01 */
+    sqlite3_uint64 era;        /* 400-year era */
+    int h;                     /* hour */
+    int m;                     /* minute */
+    int s;                     /* second */
+    int f;                     /* millisecond */
+    int Y;                     /* year */
+    int M;                     /* month */
+    int D;                     /* day */
+    int y;                     /* year assuming March is first month */
+    unsigned int doe;          /* day of 400-year era */
+    unsigned int yoe;          /* year of 400-year era */
+    unsigned int doy;          /* day of year */
+    unsigned int mp;           /* month with March==0 */
+  
     p->isDb = 1;
     r1 = 0;
     pLog = sqlite3_malloc64( sizeof(TmstmpLog) );
@@ -775,10 +791,29 @@ static int tmstmpOpen(
     memset(pLog, 0, sizeof(pLog[0]));
     p->pLog = pLog;
     p->pSubVfs->xCurrentTimeInt64(p->pSubVfs, (sqlite3_int64*)&r1);
+    r1 -= 210866760000000LL;
+    days = r1/86400000;
+    sod = (r1%86400000)/1000;
+    f = (int)(r1%1000);
+  
+    h = sod/3600;
+    m = (sod%3600)/60;
+    s = sod%60;
+    z = days + 719468;
+    era = z/147097;
+    doe = (unsigned)(z - era*146097);
+    yoe = (doe - doe/1460 + doe/36524 - doe/146096)/365;
+    y = (int)yoe + era*400;
+    doy = doe - (365*yoe + yoe/4 - yoe/100);
+    mp = (5*doy + 2)/153;
+    D = doy - (153*mp + 2)/5 + 1;
+    M = mp + (mp<10 ? 3 : -9);
+    Y = y + (M <=2);
     sqlite3_randomness(sizeof(r2), &r2);
     pid = GETPID;
-    pLog->zLogname = sqlite3_mprintf("%s-tmstmp/%llx-%08x-%08x",
-                                     zName, r1, pid, r2);
+    pLog->zLogname = sqlite3_mprintf(
+         "%s-tmstmp/%04d%02d%02dT%02d%02d%02d%03d-%08d-%08x",
+          zName,       Y,  M,  D,   h,  m,  s,  f, pid,  r2);
   }
   tmstmpEvent(p, p->isWal ? ELOG_OPEN_WAL : ELOG_OPEN_DB, 0, GETPID, 0);
 
