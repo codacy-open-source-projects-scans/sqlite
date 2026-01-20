@@ -643,14 +643,10 @@ static unsigned int sessionChangeHash(
     int isPK = pTab->abPK[i];
     if( bPkOnly && isPK==0 ) continue;
 
-    /* It is not possible for eType to be SQLITE_NULL here. The session 
-    ** module does not record changes for rows with NULL values stored in
-    ** primary key columns. */
     assert( eType==SQLITE_INTEGER || eType==SQLITE_FLOAT 
          || eType==SQLITE_TEXT || eType==SQLITE_BLOB 
          || eType==SQLITE_NULL || eType==0 
     );
-    assert( !isPK || (eType!=0 && eType!=SQLITE_NULL) );
 
     if( isPK ){
       a++;
@@ -658,12 +654,16 @@ static unsigned int sessionChangeHash(
       if( eType==SQLITE_INTEGER || eType==SQLITE_FLOAT ){
         h = sessionHashAppendI64(h, sessionGetI64(a));
         a += 8;
-      }else{
+      }else if( eType==SQLITE_TEXT || eType==SQLITE_BLOB ){
         int n; 
         a += sessionVarintGet(a, &n);
         h = sessionHashAppendBlob(h, n, a);
         a += n;
       }
+      /* It should not be possible for eType to be SQLITE_NULL or 0x00 here,
+      ** as the session module does not record changes for rows with NULL
+      ** values stored in primary key columns. But a corrupt changesets
+      ** may contain such a value.  */
     }else{
       a += sessionSerialLen(a);
     }
@@ -3072,10 +3072,13 @@ static int sessionGenerateChangeset(
   }
 
   if( pSession->rc ) return pSession->rc;
-  rc = sqlite3_exec(pSession->db, "SAVEPOINT changeset", 0, 0, 0);
-  if( rc!=SQLITE_OK ) return rc;
 
   sqlite3_mutex_enter(sqlite3_db_mutex(db));
+  rc = sqlite3_exec(pSession->db, "SAVEPOINT changeset", 0, 0, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_mutex_leave(sqlite3_db_mutex(db));
+    return rc;
+  }
 
   for(pTab=pSession->pTable; rc==SQLITE_OK && pTab; pTab=pTab->pNext){
     if( pTab->nEntry ){
@@ -3631,8 +3634,15 @@ static int sessionChangesetBufferTblhdr(SessionInput *pIn, int *pnByte){
     while( (pIn->iNext + nRead)<pIn->nData && pIn->aData[pIn->iNext + nRead] ){
       nRead++;
     }
+
+    /* Break out of the loop if if the nul-terminator byte has been found.
+    ** Otherwise, read some more input data and keep seeking. If there is
+    ** no more input data, consider the changeset corrupt.  */
     if( (pIn->iNext + nRead)<pIn->nData ) break;
     rc = sessionInputBuffer(pIn, nRead + 100);
+    if( rc==SQLITE_OK && (pIn->iNext + nRead)>=pIn->nData ){
+      rc = SQLITE_CORRUPT_BKPT;
+    }
   }
   *pnByte = nRead+1;
   return rc;
