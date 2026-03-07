@@ -69,6 +69,7 @@ static Decimal *decimalNewFromText(const char *zIn, int n){
   int i;
   int iExp = 0;
 
+  if( zIn==0 ) goto new_from_text_failed;
   p = sqlite3_malloc( sizeof(*p) );
   if( p==0 ) goto new_from_text_failed;
   p->sign = 0;
@@ -128,9 +129,10 @@ static Decimal *decimalNewFromText(const char *zIn, int n){
       }
     }
     if( iExp>0 ){   
-      p->a = sqlite3_realloc64(p->a, (sqlite3_int64)p->nDigit
+      signed char *a = sqlite3_realloc64(p->a, (sqlite3_int64)p->nDigit
                                      + (sqlite3_int64)iExp + 1 );
-      if( p->a==0 ) goto new_from_text_failed;
+      if( a==0 ) goto new_from_text_failed;
+      p->a = a;
       memset(p->a+p->nDigit, 0, iExp);
       p->nDigit += iExp;
     }
@@ -148,9 +150,10 @@ static Decimal *decimalNewFromText(const char *zIn, int n){
       }
     }
     if( iExp>0 ){
-      p->a = sqlite3_realloc64(p->a, (sqlite3_int64)p->nDigit
+      signed char *a = sqlite3_realloc64(p->a, (sqlite3_int64)p->nDigit
                                      + (sqlite3_int64)iExp + 1 );
-      if( p->a==0 ) goto new_from_text_failed;
+      if( a==0 ) goto new_from_text_failed;
+      p->a = a;
       memmove(p->a+iExp, p->a, p->nDigit);
       memset(p->a, 0, iExp);
       p->nDigit += iExp;
@@ -298,6 +301,7 @@ static void decimal_round(Decimal *p, int N){
   int i;
   int nZero;
   if( N<1 ) return;
+  if( p==0 ) return;
   for(nZero=0; nZero<p->nDigit && p->a[nZero]==0; nZero++){}
   N += nZero;
   if( p->nDigit<=N ) return;
