@@ -1,5 +1,5 @@
-C Rework\sthe\s".indexes"\scommand\sof\sthe\sCLI.\s\s(1)\sThe\sPATTERN\snow\smatches\nthe\sname\sof\sthe\sindex\sitself,\snot\sthe\sname\sof\sthe\stable\scontaining\nthe\sindex,\sthus\smaking\sthe\spattern\sactually\suseful.\s\s(2)\s\sSystem-generated\nindexes\s(for\sUNIQUE\sconstraints\sand\ssimilar)\sare\somitted\sunless\nthe\s-a|-all\sor\s--sys\soptions\sare\sadded.\s\s(3)\sThe\s--expr\soption\scauses\nonly\sexpression\sindexes\sto\sbe\sshown.
-D 2026-03-16T15:35:41.736
+C Fix\san\sassertion\sfault\sthat\scould\soccur\sin\sRTree\swhen\sgiven\sa\scorrupt\ndatabase.
+D 2026-03-17T12:07:49.388
 F .fossil-settings/binary-glob 61195414528fb3ea9693577e1980230d78a1f8b0a54c78cf1b9b24d0a409ed6a x
 F .fossil-settings/empty-dirs dbb81e8fc0401ac46a1491ab34a7f2c7c0452f2f06b54ebb845d024ca8283ef1
 F .fossil-settings/ignore-glob 35175cdfcf539b2318cb04a9901442804be81cd677d8b889fcc9149c21f239ea
@@ -490,7 +490,7 @@ F ext/recover/sqlite3recover.h 011c799f02deb70ab685916f6f538e6bb32c4e0025e79bfd0
 F ext/recover/test_recover.c 3d0fb1df7823f5bc22a0b93955034d16a2dfa2eb1e443e9a0123a77f120599a3
 F ext/rtree/README 734aa36238bcd2dee91db5dba107d5fcbdb02396612811377a8ad50f1272b1c1
 F ext/rtree/geopoly.c bd1971479184d559499ff3087c37f2823977d7b0ec80916141ae66f70345c88d
-F ext/rtree/rtree.c 9331997a76b88a9bc04e156bdfd6e2fe35c0aa93bc338ebc6aa0ae470fe4a852
+F ext/rtree/rtree.c 44abdd5df278ca1901daf29c82cce6785f0ee82ce59e28160ee988c17a9a185b
 F ext/rtree/rtree.h 4a690463901cb5e6127cf05eb8e642f127012fd5003830dbc974eca5802d9412
 F ext/rtree/rtree1.test e0608db762b2aadca0ecb6f97396cf66244490adc3ba88f2a292b27be3e1da3e
 F ext/rtree/rtree2.test 9d9deddbb16fd0c30c36e6b4fdc3ee3132d765567f0f9432ee71e1303d32603d
@@ -685,7 +685,7 @@ F src/dbstat.c 73362c0df0f40ad5523a6f5501224959d0976757b511299bf892313e79d14f5c
 F src/delete.c 901499bed747c3b4b2be45be1abe912ba50a3f6a40ba88cc006ccf279f2d0e97
 F src/expr.c 51e9c77ff5d9a21439e611fe6571a3cd50387e526e13c5614fd407e5b8571930
 F src/fault.c 460f3e55994363812d9d60844b2a6de88826e007
-F src/fkey.c 9a5b5b56af9f8fd5ddff8f83816de3e6d9b91ff392eeaefe707a59623e55aae7
+F src/fkey.c 931f74cec1dc8038a0217ef340c91ce147dd1bbed08dc40c47ee0ec6edfffb08
 F src/func.c 6e7de3551ae0f8205006e5109f025223246edd20186d54d90746dee7c1c5c093
 F src/global.c a19e4b1ca1335f560e9560e590fc13081e21f670643367f99cb9e8f9dc7d615b
 F src/hash.c 03c8c0f4be9e8bcb6de65aa26d34a61d48a9430747084a69f9469fbb00ea52ca
@@ -797,7 +797,7 @@ F src/trigger.c 4bf3bfb3851d165e4404a9f9e69357345f3f7103378c07e07139fdd8aeb7bd20
 F src/update.c 3e5e7ff66fa19ebe4d1b113d480639a24cc1175adbefabbd1a948a07f28e37cf
 F src/upsert.c 215328c3f91623c520ec8672c44323553f12caeb4f01b1090ebdca99fdf7b4f1
 F src/utf.c 7267c3fb9e2467020507601af3354c2446c61f444387e094c779dccd5ca62165
-F src/util.c 0cb2e590e9dcac6807352017fcbf5a52e0f836d74a338cb8c02ee3162bcf6508
+F src/util.c 0dbd633bdc509a1c967e4b49b1555820494d936131017634d7dec96c0b8343ce
 F src/vacuum.c d3d35d8ae893d419ade5fa196d761a83bddcbb62137a1a157ae751ef38b26e82
 F src/vdbe.c 5328c99dd256ee8132383565a86e253543a85daccfd7477c52f20bac6b385a7f
 F src/vdbe.h 966d0677a540b7ea6549b7c4e1312fc0d830fce3a235a58c801f2cc31cf5ecf9
@@ -2136,6 +2136,7 @@ F tool/mkautoconfamal.sh 06fbe090b81c24e592c1f22b404334f805ba74d482a9260f2ac81e6
 F tool/mkccode.tcl c42a8f8cf78f92e83795d5447460dbce7aaf78a3bbf9082f1507dc71a3665f3c x
 F tool/mkcombo.tcl 2a5189b219c4a495e1ff7fc980bd568d3cfb82ae9d50c84e77f7a161e96fc132
 F tool/mkctimec.tcl 3fb5cad05922f5da61262cb6bcd5868a34e94a49ca8833ae2d7796e7df075576 x
+F tool/mkfptab.c 24ea40113f96584caca3f6dd06b4ad5adffa0f39023910cb83fa7ef2ffa9b0ba
 F tool/mkkeywordhash.c 82d5af1d0e677900739fba59155cddac172d8c712c2d91ab73d6e6bcb30060f0
 F tool/mkmsvcmin.tcl d76c45efda1cce2d4005bcea7b8a22bb752e3256009f331120fb4fecb14ebb7a
 F tool/mkopcodec.tcl 33d20791e191df43209b77d37f0ff0904620b28465cca6990cf8d60da61a07ef
@@ -2192,8 +2193,8 @@ F tool/warnings-clang.sh bbf6a1e685e534c92ec2bfba5b1745f34fb6f0bc2a362850723a9ee
 F tool/warnings.sh d924598cf2f55a4ecbc2aeb055c10bd5f48114793e7ba25f9585435da29e7e98
 F tool/win/sqlite.vsix deb315d026cc8400325c5863eef847784a219a2f
 F tool/winmain.c 00c8fb88e365c9017db14c73d3c78af62194d9644feaf60e220ab0f411f3604c
-P 80bc5bc07e221f837c28066f0a438f11c8ab6be4c8ba93615439eb1667967003
-R 3ad37f8e404f71b8ecba081b76070ad6
+P b459f6ff63325f71d4056dad2ebb536e0d414c973f3c6e167e8f67e94e6f0e2d
+R bb184015ffe40d514d42157c68150626
 U drh
-Z d82e0cbe9c28448c805d23a2e1afab0e
+Z fbfa20b11c4c5ba2c7155c634a7ba929
 # Remove this line to create a well-formed Fossil manifest.
