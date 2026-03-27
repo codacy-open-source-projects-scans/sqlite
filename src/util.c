@@ -820,24 +820,27 @@ static double sqlite3Fp10Convert2(u64 d, int p){
 **
 ** Return positive if the result is a valid real number (or integer) and
 ** zero or negative if the string is empty or contains extraneous text.
-** More specifically:
+** Lower bits of the return value contain addition information about the
+** parse:
 **
-**      1          =>  The input string is a pure integer
-**      2 or more  =>  The input has a decimal point or eNNN clause
-**      0 or less  =>  The input string is not well-formed
-**     -1          =>  The input is not well-formed, but it does begin
-**                     with a well-formed floating-point literal (with
-**                     a "." or a "eNNN" suffix or both) followed by
-**                     other extraneous text.
+**   bit 0       =>   Set for any valid input
+**   bit 1       =>   Input contains a decimal point or eNNN clause
+**                    This bit is zero if the input is an integer
+**   bit 2       =>   The input is exactly 0.0, not an underflow from
+**                    some value near zero
+**   bit 3       =>   More than 19 significant digits in the input
 **
-** Valid numbers are in one of these formats:
+** If the input contains a syntax error but begins with text that might
+** be a valid number of some kind, then the result is negative.  The
+** result is only zero if no prefix of the input could be interpreted as
+** a number.
+**
+** Leading and trailing whitespace is ignored.  Valid numbers are in
+** one of the formats below:
 **
 **    [+-]digits[E[+-]digits]
 **    [+-]digits.[digits][E[+-]digits]
 **    [+-].digits[E[+-]digits]
-**
-** Leading and trailing whitespace is ignored for the purpose of determining
-** validity.
 **
 ** Algorithm sketch:  Compute an unsigned 64-bit integer s and a base-10
 ** exponent d such that the value encoding by the input is s*pow(10,d).
@@ -859,20 +862,20 @@ int sqlite3AtoF(const char *zIn, double *pResult){
   int neg = 0;       /* True for a negative value */
   u64 s = 0;         /* mantissa */
   int d = 0;         /* Value is s * pow(10,d) */
-  int seenDigit = 0; /* true if any digits seen */
-  int seenFP = 0;    /* True if we've seen a "." or a "e" */
+  int mState = 0;    /* 1: digit seen 2: fp 4: hard-zero */
   unsigned v;        /* Value of a single digit */
 
   start_of_text:
   if( (v = (unsigned)z[0] - '0')<10 ){
     parse_integer_part:
-    seenDigit = 1;
+    mState = 1;
     s = v;
     z++;
     while( (v = (unsigned)z[0] - '0')<10 ){
       s = s*10 + v;
       z++;
-      if( s>=(LARGEST_INT64-9)/10 ){
+      if( s>=(LARGEST_UINT64-9)/10 ){
+        mState = 9;
         while( sqlite3Isdigit(z[0]) ){ z++; d++; }
         break;
       }
@@ -894,20 +897,22 @@ int sqlite3AtoF(const char *zIn, double *pResult){
   /* if decimal point is present */
   if( *z=='.' ){
     z++;
-    seenFP = 1;
     if( sqlite3Isdigit(z[0]) ){
-      seenDigit = 1;
+      mState |= 1;
       do{
-        if( s<((LARGEST_INT64-9)/10) ){
+        if( s<(LARGEST_UINT64-9)/10 ){
           s = s*10 + z[0] - '0';
           d--;
+        }else{
+          mState = 11;
         }
-        z++;
-      }while( sqlite3Isdigit(z[0]) );
+      }while( sqlite3Isdigit(*++z) );
+    }else if( mState==0 ){
+      *pResult = 0.0;
+      return 0;
     }
-  }
-
-  if( !seenDigit ){
+    mState |= 2;
+  }else if( mState==0 ){
     *pResult = 0.0;
     return 0;
   }
@@ -931,7 +936,7 @@ int sqlite3AtoF(const char *zIn, double *pResult){
     if( (v = (unsigned)z[0] - '0')<10 ){
       int exp = v;
       z++;
-      seenFP = 1;
+      mState |= 2;
       while( (v = (unsigned)z[0] - '0')<10 ){
         exp = exp<10000 ? (exp*10 + v) : 10000;
         z++;
@@ -943,33 +948,30 @@ int sqlite3AtoF(const char *zIn, double *pResult){
     }
   }
 
-  /* skip trailing spaces */
-  while( sqlite3Isspace(*z) ) z++;
-
   /* Convert s*pow(10,d) into real */
-  *pResult = s ? sqlite3Fp10Convert2(s,d) : 0.0;
+  if( s==0 ){
+    *pResult = 0.0;
+    mState |= 4;
+  }else{
+    *pResult = sqlite3Fp10Convert2(s,d);
+  }
   if( neg ) *pResult = -*pResult;
   assert( !sqlite3IsNaN(*pResult) );
 
   /* return true if number and no extra non-whitespace characters after */
   if( z[0]==0 ){
-    return seenFP+1;
-  }else if( seenFP ){
-    return -1;   /* Prefix is a floating point number */
-  }else{
-    return 0;    /* Prefix is just an integer */
+    return mState;
   }
+  if( sqlite3Isspace(z[0]) ){
+    do{ z++; }while( sqlite3Isspace(*z) );
+    if( z[0]==0 ){
+      return mState;
+    }
+  }
+  return 0xfffffff0 | mState;
 #else
-  return !sqlite3Atoi64(z, pResult, strlen(z), SQLITE_UTF8);
+  return sqlite3Atoi64(z, pResult, strlen(z), SQLITE_UTF8)==0;
 #endif /* SQLITE_OMIT_FLOATING_POINT */
-}
-
-/*
-** Access to sqlite3AtoF()
-*/
-double sqlite3_atof(const char *z){
-  double r;
-  return sqlite3AtoF(z,&r)>0 ? r : 0.0;
 }
 
 /*
