@@ -354,9 +354,9 @@ static int sessionVarintGet(const u8 *aBuf, int *piVal){
 ** Return the number of bytes read.
 */
 static int sessionVarintGetSafe(const u8 *aBuf, int nBuf, int *piVal){
-  u8 aCopy[5];
+  u8 aCopy[9];
   const u8 *aRead = aBuf;
-  if( nBuf<5 ){
+  if( nBuf<sizeof(aCopy) ){
     memcpy(aCopy, aBuf, nBuf);
     aRead = aCopy;
   }
@@ -6052,7 +6052,9 @@ static int sessionChangesetFindTable(
     memset(pTab, 0, sizeof(SessionTable));
     pTab->nCol = nCol;
     pTab->abPK = (u8*)&pTab[1];
-    memcpy(pTab->abPK, abPK, nCol);
+    if( nCol>0 ){
+      memcpy(pTab->abPK, abPK, nCol);
+    }
     pTab->zName = (char*)&pTab->abPK[nCol];
     memcpy(pTab->zName, zTab, nTab+1);
 
