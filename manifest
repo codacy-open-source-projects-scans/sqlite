@@ -1,5 +1,5 @@
-C Minor\spatch\sto\stest/json/json-speed-check.sh.\s\sThat\sscript\sis\snot\smaintained,\nbut\sthis\sfix\sat\sleast\sgets\sit\sworking\sfor\snow.
-D 2026-04-02T16:21:47.245
+C Enhance\stestrunner.tcl\sso\sthat\sa\sPATTERN\sargument\sthat\sbegins\swith\s"~"\sis\nan\s"anti-pattern".\s\sOnly\srun\stests\sthat\smatch\sone\sor\smore\spatterns\sif\sthere\nare\sany\spatterns\s*and*\sdo\snot\smatch\sany\santi-pattern.
+D 2026-04-03T19:48:01.124
 F .fossil-settings/binary-glob 61195414528fb3ea9693577e1980230d78a1f8b0a54c78cf1b9b24d0a409ed6a x
 F .fossil-settings/empty-dirs dbb81e8fc0401ac46a1491ab34a7f2c7c0452f2f06b54ebb845d024ca8283ef1
 F .fossil-settings/ignore-glob 35175cdfcf539b2318cb04a9901442804be81cd677d8b889fcc9149c21f239ea
@@ -47,7 +47,7 @@ F autosetup/find_tclconfig.tcl e64886ffe3b982d4df42cd28ed91fe0b5940c2c5785e126c1
 F autosetup/jimsh0.c 916bbdf8023fbda9937afae57d81a853d8c2ea00f2320aa27becbc33574f963d
 F autosetup/pkg-config.tcl 4e635bf39022ff65e0d5434339dd41503ea48fc53822c9c5bde88b02d3d952ba
 F autosetup/proj.tcl ce301197f364f7ce2acabbbd84b43d19e917ec73653157ca134a06f32d322712
-F autosetup/sqlite-config.tcl 6f8b3a88f5e7fdb86ba920fc97fd4dbfaaf92d0d91c60bb006fb8a52780a68b2
+F autosetup/sqlite-config.tcl 8fecce2838b7e7d990d161d08998034f3e3b0b2ddf4d7a99dbfafba9c902e302
 F autosetup/system.tcl 51d4be76cd9a9074704b584e5c9cbba616202c8468cf9ba8a4f8294a7ab1dba9
 F autosetup/teaish/README.txt b40071e6f8506500a2f7f71d5fc69e0bf87b9d7678dd9da1e5b4d0acbf40b1ca
 F autosetup/teaish/core.tcl e014dd95900c7f9a34e8e0f460f47e94841059827bce8b4c49668b0c7ae3f1a0
@@ -573,7 +573,7 @@ F ext/session/sessionstat1.test 5e718d5888c0c49bbb33a7a4f816366db85f59f6a4f97544
 F ext/session/sessionwor.test 6fd9a2256442cebde5b2284936ae9e0d54bde692d0f5fd009ecef8511f4cf3fc
 F ext/session/sqlite3session.c 165a880952fdc1e6397cb05e7d337ff5174596078c1fb0abd4f9933141c565e3
 F ext/session/sqlite3session.h 063e7bf7be2fff874456f452a224b5b3013b25682d108933b0351c93a1279b9c
-F ext/session/test_session.c beefbb051a2baa2636f463ad1c50558294a418f955219be9423de54dff946f0f
+F ext/session/test_session.c 21b820d8b8007587fa32721e4cba104765f796345656fd277e94c58ecba9c34d
 F ext/wasm/GNUmakefile 68c750f173106d9d63f12c1edf1256c6f4bad9894b155da5db64322f4912de4b
 F ext/wasm/README-dist.txt f01081a850ce38a56706af6b481e3a7878e24e42b314cfcd4b129f0f8427066a
 F ext/wasm/README.md 2e87804e12c98f1d194b7a06162a88441d33bb443efcfe00dc6565a780d2f259
@@ -1714,7 +1714,7 @@ F test/temptrigfault.tes fc5918e64f3867156fefe7cfca9d8e1f495134a5229b2b511b0dc11
 F test/temptrigger.test a00f258ed8d21a0e8fd4f322f15e8cfb5cef2e43655670e07a753e3fb4769d61
 F test/tester.tcl 2d943f60200e0a36bcd3f1f0baf181a751cd3604ef6b6bd4c8dc39b4e8a53116
 F test/testloadext.c 862b848783eaed9985fbce46c65cd214664376b549fae252b364d5d1ef350a27
-F test/testrunner.tcl 78d67079fc39caf2af3fd9d4c30bdac78dae7ec50b9fc802835e7a5189581e07 x
+F test/testrunner.tcl 6b232f0d4825dec8b967754503080fc9609fad077f582d02f86bd2d95bec4110 x
 F test/testrunner_data.tcl 078e251983c8fc573567125147655f68132210f226c92922daf21fb913779717
 F test/testrunner_estwork.tcl 81e2ae10238f50540f42fbf2d94913052a99bfb494b69e546506323f195dcff9
 F test/thread001.test a0985c117eab62c0c65526e9fa5d1360dd1cac5b03bde223902763274ce21899
@@ -2197,8 +2197,8 @@ F tool/warnings-clang.sh bbf6a1e685e534c92ec2bfba5b1745f34fb6f0bc2a362850723a9ee
 F tool/warnings.sh a554d13f6e5cf3760f041b87939e3d616ec6961859c3245e8ef701d1eafc2ca2
 F tool/win/sqlite.vsix deb315d026cc8400325c5863eef847784a219a2f
 F tool/winmain.c 00c8fb88e365c9017db14c73d3c78af62194d9644feaf60e220ab0f411f3604c
-P c1c7e024c34da8eb0258ce552f3f81921280ccf0f1fea59374f381c0c7b43b74
-R ac53c3b2ced059da4ac7bc638c54b886
+P 2be1c5a3e47f1276b9f0a4771f2d5fb0bc1ccb907c855caa04d757b4145533f5
+R fb320f829f7981007da6fed7c98fe352
 U drh
-Z df1c635b117e94e95ff04bfd11201f5f
+Z 2a88cf0b8fe57448638ae0fcc1526344
 # Remove this line to create a well-formed Fossil manifest.
