@@ -1,5 +1,5 @@
-C Enhance\stestrunner.tcl\sso\sthat\sa\sPATTERN\sargument\sthat\sbegins\swith\s"~"\sis\nan\s"anti-pattern".\s\sOnly\srun\stests\sthat\smatch\sone\sor\smore\spatterns\sif\sthere\nare\sany\spatterns\s*and*\sdo\snot\smatch\sany\santi-pattern.
-D 2026-04-03T19:48:01.124
+C Add\snew\sassert()\sstatements,\sneedlessly\sincrease\sthe\sresolution\sof\ssome\ninteger\scalculations,\sand\schange\sa\sstructure\sfield\sname\sto\sbe\sglobally\nunique,\sall\sin\san\seffort\sto\sforestall\sAI\shallucinations\sabout\serrors\sin\nthe\scode.
+D 2026-04-04T22:14:22.015
 F .fossil-settings/binary-glob 61195414528fb3ea9693577e1980230d78a1f8b0a54c78cf1b9b24d0a409ed6a x
 F .fossil-settings/empty-dirs dbb81e8fc0401ac46a1491ab34a7f2c7c0452f2f06b54ebb845d024ca8283ef1
 F .fossil-settings/ignore-glob 35175cdfcf539b2318cb04a9901442804be81cd677d8b889fcc9149c21f239ea
@@ -596,7 +596,7 @@ F ext/wasm/api/sqlite3-api-oo1.c-pp.js 5f203f5bb5d48a9e43ec51e791dc411c24dca8258
 F ext/wasm/api/sqlite3-api-prologue.js 4336f02ac24ba58e68e355adb9da2804a1eef15a4aee961fa813c7d812a56b54
 F ext/wasm/api/sqlite3-api-worker1.c-pp.js 1fa34e9b0e3b90a8898e4f700d7125e44c81877f182627bb8564b97989bc6e78
 F ext/wasm/api/sqlite3-license-version-header.js 98d90255a12d02214db634e041c8e7f2f133d9361a8ebf000ba9c9af4c6761cc
-F ext/wasm/api/sqlite3-opfs-async-proxy.c-pp.js 7df77f9d9fe4c6b31b63f2ffc7dccbc4146ee7db6bc6e1ff201db72b5bf5500c
+F ext/wasm/api/sqlite3-opfs-async-proxy.c-pp.js 25e31482b04293a33d7599f1459eb552b3eb36ca10c02c816122d3308bf80cb2
 F ext/wasm/api/sqlite3-vfs-helper.c-pp.js 3f828cc66758acb40e9c5b4dcfd87fd478a14c8fb7f0630264e6c7fa0e57515d
 F ext/wasm/api/sqlite3-vfs-kvvfs.c-pp.js 27fb135ba3b805b66c90a7333b56080345bf1db79335c3e48b6d01ad7aa09607
 F ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js 1c742ed92c0515c8ef97d2b132feb01168252bfd847fed5d52607d8a42d23c6a
@@ -695,7 +695,7 @@ F src/hash.h 46b92795a95bfefb210f52f0c316e9d7cdbcdd7e7fcfb0d8be796d3a5767cddf
 F src/hwtime.h 21c2cf1f736e7b97502c3674d0c386db3f06870d6f10d0cf8174e2a4b8cb726e
 F src/in-operator.md 10cd8f4bcd225a32518407c2fb2484089112fd71
 F src/insert.c dfd311b0ac2d4f6359e62013db67799757f4d2cc56cca5c10f4888acfbbfa3fd
-F src/json.c 5027b856cd9b621dc9ba66b211e21a440ccdc63cefdefb44c51e7d3ac550d1a4
+F src/json.c fe454776cba1c735f72bfb5809cb6c738754a891974ab35993c5c8f8b9560b09
 F src/legacy.c d7874bc885906868cd51e6c2156698f2754f02d9eee1bae2d687323c3ca8e5aa
 F src/loadext.c 56a542244fbefc739a2ef57fac007c16b2aefdb4377f584e9547db2ce3e071f9
 F src/main.c 387bb9d0216d6d35b221481ba8e661d94ad043060cd89581b6422c269ce680a0
@@ -719,10 +719,10 @@ F src/os.h 1ff5ae51d339d0e30d8a9d814f4b8f8e448169304d83a7ed9db66a65732f3e63
 F src/os_common.h 6c0eb8dd40ef3e12fe585a13e709710267a258e2c8dd1c40b1948a1d14582e06
 F src/os_kv.c e7d96727db5b67e39d590a68cc61c86daf4c093c36c011a09ebfb521182ec28d
 F src/os_setup.h 8efc64eda6a6c2f221387eefc2e7e45fd5a3d5c8337a7a83519ba4fbd2957ae2
-F src/os_unix.c fa5e09b4df35ad845440cad67b86908cfe1fd4c28c51915f82e23633d1992bf4
-F src/os_win.c 0d553b6e8b92c8eb85e7f1b4a8036fe8638c8b32c9ad8d9d72a861c10f81b4c5
+F src/os_unix.c 44050a8e6c3fb34a5b456246a9e2148f9c503b64d23f8f8f4e569e6daed8499f
+F src/os_win.c 774546a5b9c48cc751df9327ff71d6375042ad22b4b5ab2a191c56858eaff121
 F src/os_win.h 5e168adf482484327195d10f9c3bce3520f598e04e07ffe62c9c5a8067c1037b
-F src/pager.c fe34fd22ec251436985d7b6ebdd05bf238a17901c2cb23d3d28974dd2361a912
+F src/pager.c 230dbf96b3ef762f008af0fad17bdadfabe0525530ba2e7406affd19de81ed1c
 F src/pager.h 6137149346e6c8a3ddc1eeb40aee46381e9bc8b0fcc6dda8a1efde993c2275b8
 F src/parse.y 3b784d6083380a950e3b1b32ce5ddd303e8c7c209d8ab788df2c62aaf9ee8eb3
 F src/pcache.c 588cc3c5ccaaadde689ed35ce5c5c891a1f7b1f4d1f56f6cf0143b74d8ee6484
@@ -801,7 +801,7 @@ F src/upsert.c 215328c3f91623c520ec8672c44323553f12caeb4f01b1090ebdca99fdf7b4f1
 F src/utf.c 7267c3fb9e2467020507601af3354c2446c61f444387e094c779dccd5ca62165
 F src/util.c 4f0abc15f63829e12cdfeeb490faf25ac65894b0bcc20d660e3f3757b8e2360b
 F src/vacuum.c d3d35d8ae893d419ade5fa196d761a83bddcbb62137a1a157ae751ef38b26e82
-F src/vdbe.c 6c57525d7db0232d52687d30da1093db0c152f14206c2ef1adf0c19a09d863e3
+F src/vdbe.c 117e65587f06a5298a6781b90438be462e10518f1439531dbf8124a72d7dec0f
 F src/vdbe.h 70e862ac8a11b590f8c1eaac17a0078429d42bc4ea3f757a9af0f451dd966a71
 F src/vdbeInt.h c31ba4dc8d280c2b1dc89c6fcee68f2555e3813ab34279552c20b964c0e338b1
 F src/vdbeapi.c 6cdcbe5c7afa754c998e73d2d5d2805556268362914b952811bdfb9c78a37cf1
@@ -813,7 +813,7 @@ F src/vdbetrace.c 49e689f751505839742f4a243a1a566e57d5c9eaf0d33bbaa26e2de3febf7b
 F src/vdbevtab.c fc46b9cbd759dc013f0b3724549cc0d71379183c667df3a5988f7e2f1bd485f3
 F src/vtab.c 5437ce986db2f70e639ce8a3fe68dcdfe64b0f1abb14eaebecdabd5e0766cc68
 F src/vxworks.h 9d18819c5235b49c2340a8a4d48195ec5d5afb637b152406de95a9436beeaeab
-F src/wal.c 88d94fd15a75f6eda831fa32d1148a267ea37bf0a4b69829a73dfde06244b08f
+F src/wal.c 7340d4f9bb827bd349127cac6b2cf0cb7f76b9fda645f7b9b0bf7a6e0b1e2e7c
 F src/wal.h ba252daaa94f889f4b2c17c027e823d9be47ce39da1d3799886bbd51f0490452
 F src/walker.c d5006d6b005e4ea7302ad390957a8d41ed83faa177e412f89bc5600a7462a014
 F src/where.c bffca5e4ef20d0bfbdc24f1dc13fd3f955284225a8ad25a4454635f6be39aad0
@@ -2197,8 +2197,8 @@ F tool/warnings-clang.sh bbf6a1e685e534c92ec2bfba5b1745f34fb6f0bc2a362850723a9ee
 F tool/warnings.sh a554d13f6e5cf3760f041b87939e3d616ec6961859c3245e8ef701d1eafc2ca2
 F tool/win/sqlite.vsix deb315d026cc8400325c5863eef847784a219a2f
 F tool/winmain.c 00c8fb88e365c9017db14c73d3c78af62194d9644feaf60e220ab0f411f3604c
-P 2be1c5a3e47f1276b9f0a4771f2d5fb0bc1ccb907c855caa04d757b4145533f5
-R fb320f829f7981007da6fed7c98fe352
+P 44faae909196432926aeaea921ce284dc37fd5cfc8cf08c098c3aa02cb5064ae
+R 34e7e85f33bced0d4e61e11e0c48aaf6
 U drh
-Z 2a88cf0b8fe57448638ae0fcc1526344
+Z f111a3467b957be02b27607924e853ce
 # Remove this line to create a well-formed Fossil manifest.
