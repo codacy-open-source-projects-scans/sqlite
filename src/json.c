@@ -1150,7 +1150,7 @@ static void jsonWrongNumArgs(
 **
 ** Return the number of errors.
 */
-static int jsonBlobExpand(JsonParse *pParse, u64 N){
+static int jsonBlobExpand(JsonParse *pParse, u32 N){
   u8 *aNew;
   u64 t;
   assert( N>pParse->nBlobAlloc );
@@ -1178,12 +1178,12 @@ static int jsonBlobExpand(JsonParse *pParse, u64 N){
 */
 static int jsonBlobMakeEditable(JsonParse *pParse, u32 nExtra){
   u8 *aOld;
-  u64 nSize;
+  u32 nSize;
   assert( !pParse->bReadOnly );
   if( pParse->oom ) return 0;
   if( pParse->nBlobAlloc>0 ) return 1;
   aOld = pParse->aBlob;
-  nSize = (u64)pParse->nBlob + (u64)nExtra;
+  nSize = pParse->nBlob + nExtra;
   pParse->aBlob = 0;
   if( jsonBlobExpand(pParse, nSize) ){
     return 0;
@@ -1199,8 +1199,7 @@ static SQLITE_NOINLINE void jsonBlobExpandAndAppendOneByte(
   JsonParse *pParse,
   u8 c
 ){
-  assert( pParse->nBlob<=0x7fffffff );
-  jsonBlobExpand(pParse, (u64)pParse->nBlob+1);
+  jsonBlobExpand(pParse, pParse->nBlob+1);
   if( pParse->oom==0 ){
     assert( pParse->nBlob+1<=pParse->nBlobAlloc );
     pParse->aBlob[pParse->nBlob++] = c;
@@ -1317,7 +1316,7 @@ static int jsonBlobChangePayloadSize(
   }
   delta = nNeeded - nExtra;
   if( delta ){
-    u64 newSize = (u64)pParse->nBlob + delta;
+    u32 newSize = pParse->nBlob + delta;
     if( delta>0 ){
       if( newSize>pParse->nBlobAlloc && jsonBlobExpand(pParse, newSize) ){
         return 0;  /* OOM error.  Error state recorded in pParse->oom. */
@@ -2166,9 +2165,8 @@ static u32 jsonbPayloadSize(const JsonParse *pParse, u32 i, u32 *pSz){
          (pParse->aBlob[i+7]<<8) + pParse->aBlob[i+8];
     n = 9;
   }
-  assert( pParse->nBlob<=0x7fffffff );
-  if( (i64)i+sz+n > (i64)pParse->nBlob
-   && (i64)i+sz+n > (i64)pParse->nBlob-(i64)pParse->delta
+  if( (i64)i+sz+n > pParse->nBlob
+   && (i64)i+sz+n > pParse->nBlob-pParse->delta
   ){
     *pSz = 0;
     return 0;
@@ -2656,9 +2654,6 @@ static void jsonBlobEdit(
   u32 nIns               /* Bytes of content to insert */
 ){
   i64 d = (i64)nIns - (i64)nDel;
-  assert( nIns<=0x7fffffff );
-  assert( nDel<=0x7fffffff );
-  assert( pParse->nBlob<=0x7fffffff );
   assert( pParse->nBlob >= (u64)iDel + (u64)nDel );
   if( d<0 && d>=(-8) && aIns!=0
    && jsonBlobOverwrite(&pParse->aBlob[iDel], aIns, nIns, (int)-d)
@@ -2666,8 +2661,8 @@ static void jsonBlobEdit(
     return;
   }
   if( d!=0 ){
-    if( (u64)pParse->nBlob + d > (u64)pParse->nBlobAlloc ){
-      jsonBlobExpand(pParse, (u64)pParse->nBlob+d);
+    if( pParse->nBlob + d > pParse->nBlobAlloc ){
+      jsonBlobExpand(pParse, pParse->nBlob+d);
       if( pParse->oom ) return;
     }
     memmove(&pParse->aBlob[iDel+nIns],

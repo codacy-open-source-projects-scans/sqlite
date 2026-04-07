@@ -278,11 +278,9 @@ static VdbeCursor *allocateCursor(
 
   i64 nByte;
   VdbeCursor *pCx = 0;
-  assert( nField<=SQLITE_MAX_COLUMN*2 );
   nByte = SZ_VDBECURSOR(nField);
   assert( ROUND8(nByte)==nByte );
   if( eCurType==CURTYPE_BTREE ) nByte += sqlite3BtreeCursorSize();
-  assert( nByte>0 && nByte<=0x7fffffff );
 
   assert( iCur>=0 && iCur<p->nCursor );
   if( p->apCsr[iCur] ){ /*OPTIMIZATION-IF-FALSE*/
@@ -306,7 +304,6 @@ static VdbeCursor *allocateCursor(
       pMem->szMalloc = 0;
       return 0;
     }
-    assert( nByte>0 && nByte<=0x7fffffff );
     pMem->szMalloc = (int)nByte;
   }
 
