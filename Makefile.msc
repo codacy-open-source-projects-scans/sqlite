@@ -1766,6 +1766,7 @@ FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\test\fuzzinvariants.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\test\vt02.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\recover\dbdata.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\recover\sqlite3recover.c
+FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\misc\analyze.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\misc\base64.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\misc\base85.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\misc\completion.c
@@ -2342,6 +2343,7 @@ SHELL_DEP = \
     $(TOP)\ext\expert\sqlite3expert.h \
     $(TOP)\ext\intck\sqlite3intck.c \
     $(TOP)\ext\intck\sqlite3intck.h \
+    $(TOP)\ext\misc\analyze.c \
     $(TOP)\ext\misc\appendvfs.c \
     $(TOP)\ext\misc\base64.c \
     $(TOP)\ext\misc\base85.c \
