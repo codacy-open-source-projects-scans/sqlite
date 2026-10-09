@@ -346,7 +346,9 @@ static int sessionVarintLen(int iVal){
 ** bytes read.
 */
 static int sessionVarintGet(const u8 *aBuf, int *piVal){
-  return getVarint32(aBuf, *piVal);
+  int ret = getVarint32(aBuf, *piVal);
+  *piVal = (*piVal & 0x7FFFFFFF);
+  return ret;
 }
 
 /*
@@ -361,7 +363,7 @@ static int sessionVarintGetSafe(const u8 *aBuf, int nBuf, int *piVal){
     memcpy(aCopy, aBuf, nBuf);
     aRead = aCopy;
   }
-  return getVarint32(aRead, *piVal);
+  return sessionVarintGet(aRead, piVal);
 }
 
 /* Load an unaligned and unsigned 32-bit integer */
@@ -1477,7 +1479,7 @@ static void sessionAppendStr(
   int *pRc
 ){
   int nStr = sqlite3Strlen30(zStr);
-  if( 0==sessionBufferGrow(p, nStr+1, pRc) ){
+  if( 0==sessionBufferGrow(p, (i64)nStr+1, pRc) ){
     memcpy(&p->aBuf[p->nBuf], zStr, nStr);
     p->nBuf += nStr;
     p->aBuf[p->nBuf] = 0x00;
@@ -1546,6 +1548,16 @@ static int sessionPrepareDfltStmt(
 }
 
 /*
+** Finalize statement pStmt. If (*pRc) is SQLITE_OK when this function is
+** called, set it to the results of the sqlite3_finalize() call. Or, if
+** it is already set to an error code, leave it as is.
+*/
+static void sessionFinalizeStmt(sqlite3_stmt *pStmt, int *pRc){
+  int rc = sqlite3_finalize(pStmt);
+  if( *pRc==SQLITE_OK ) *pRc = rc;
+}
+
+/*
 ** Table pTab has one or more existing change-records with old.* records
 ** with fewer than pTab->nCol columns. This function updates all such 
 ** change-records with the default values for the missing columns.
@@ -1567,9 +1579,8 @@ static int sessionUpdateChanges(sqlite3_session *pSession, SessionTable *pTab){
     }
   }
 
+  sessionFinalizeStmt(pStmt, &rc);
   pSession->rc = rc;
-  rc = sqlite3_finalize(pStmt);
-  if( pSession->rc==SQLITE_OK ) pSession->rc = rc;
   return pSession->rc;
 }
 
@@ -2137,7 +2148,7 @@ static int sessionDiffFindNew(
     rc = SQLITE_NOMEM;
   }else{
     sqlite3_stmt *pStmt;
-    rc = sqlite3_prepare(pSession->db, zStmt, -1, &pStmt, 0);
+    rc = sqlite3_prepare_v2(pSession->db, zStmt, -1, &pStmt, 0);
     if( rc==SQLITE_OK ){
       SessionDiffCtx *pDiffCtx = (SessionDiffCtx*)pSession->hook.pCtx;
       pDiffCtx->pStmt = pStmt;
@@ -2200,7 +2211,7 @@ static int sessionDiffFindModified(
       rc = SQLITE_NOMEM;
     }else{
       sqlite3_stmt *pStmt;
-      rc = sqlite3_prepare(pSession->db, zStmt, -1, &pStmt, 0);
+      rc = sqlite3_prepare_v2(pSession->db, zStmt, -1, &pStmt, 0);
 
       if( rc==SQLITE_OK ){
         SessionDiffCtx *pDiffCtx = (SessionDiffCtx*)pSession->hook.pCtx;
@@ -2852,6 +2863,33 @@ static int sessionPrepare(
 }
 
 /*
+** Prepare the statement specified by printf format zFmt and its trailing
+** arguments. 
+*/
+static void sessionPrepareMprintf(
+  int *pRc,
+  sqlite3 *db, 
+  sqlite3_stmt **pp, 
+  char **pzErrmsg,
+  const char *zFmt,
+  ...
+){
+  if( *pRc==SQLITE_OK ){
+    char *zSql;
+    va_list ap;
+    va_start(ap, zFmt);
+    zSql = sqlite3_vmprintf(zFmt, ap);
+    if( zSql==0 ){
+      *pRc = SQLITE_NOMEM;
+    }else{
+      *pRc = sessionPrepare(db, pp, pzErrmsg, zSql);
+      sqlite3_free(zSql);
+    }
+    va_end(ap);
+  }
+}
+
+/*
 ** Formulate and prepare a SELECT statement to retrieve a row from table
 ** zTab in database zDb based on its primary key. i.e.
 **
@@ -2895,11 +2933,11 @@ static int sessionSelectStmt(
     );
     sessionAppendStr(&cols, "tbl, ?2, stat", &rc);
   }else{
-  #if 0
+#if 0
     if( bRowid ){
       sessionAppendStr(&cols, SESSIONS_ROWID, &rc);
     }
-    #endif
+#endif
     for(i=0; i<nCol; i++){
       if( cols.nBuf ) sessionAppendStr(&cols, ", ", &rc);
       sessionAppendIdent(&cols, azCol[i], &rc);
@@ -3694,17 +3732,21 @@ static int sessionChangesetBufferRecord(
     int eType;
     rc = sessionInputBuffer(pIn, nByte + 10);
     if( rc==SQLITE_OK ){
-      eType = pIn->aData[pIn->iNext + nByte++];
-      if( eType==SQLITE_TEXT || eType==SQLITE_BLOB ){
-        int n;
-        int nRem = pIn->nData - (pIn->iNext + nByte);
-        nByte += sessionVarintGetSafe(&pIn->aData[pIn->iNext+nByte], nRem, &n);
-        nByte += n;
-        rc = sessionInputBuffer(pIn, nByte);
-      }else if( eType==SQLITE_INTEGER || eType==SQLITE_FLOAT ){
-        nByte += 8;
-      }else if( eType!=0 && eType!=SQLITE_NULL ){
+      if( pIn->iNext+nByte>=pIn->nData ){
         rc = SQLITE_CORRUPT_BKPT;
+      }else{
+        eType = pIn->aData[pIn->iNext + nByte++];
+        if( eType==SQLITE_TEXT || eType==SQLITE_BLOB ){
+          int n;
+          int nRem = pIn->nData - (pIn->iNext + nByte);
+          nByte += sessionVarintGetSafe(&pIn->aData[pIn->iNext+nByte], nRem,&n);
+          nByte += n;
+          rc = sessionInputBuffer(pIn, nByte);
+        }else if( eType==SQLITE_INTEGER || eType==SQLITE_FLOAT ){
+          nByte += 8;
+        }else if( eType!=0 && eType!=SQLITE_NULL ){
+          rc = SQLITE_CORRUPT_BKPT;
+        }
       }
     }
     if( rc==SQLITE_OK && (pIn->iNext+nByte)>pIn->nData ){
@@ -4153,7 +4195,13 @@ static int sessionChangesetInvert(
 
     /* Test for EOF. */
     if( (rc = sessionInputBuffer(pInput, 2)) ) goto finished_invert;
-    if( pInput->iNext>=pInput->nData ) break;
+    if( pInput->iNext+1>=pInput->nData ){
+      if( pInput->iNext!=pInput->nData ){ 
+        rc = SQLITE_CORRUPT_BKPT; 
+        goto finished_invert;
+      }
+      break;
+    }
     eType = pInput->aData[pInput->iNext];
 
     switch( eType ){
@@ -4349,6 +4397,7 @@ struct SessionApplyCtx {
   u8 bRebaseStarted;              /* If table header is already in rebase */
   u8 bRebase;                     /* True to collect rebase information */
   u8 bIgnoreNoop;                 /* True to ignore no-op conflicts */
+  u8 bNoUpdateLoop;               /* No update-loop processing */
   int bRowid;
   char *zErr;                     /* Error message, if any */
 };
@@ -4922,7 +4971,7 @@ static int sessionConflictHandler(
       u8 *aBlob = &pIter->in.aData[pIter->in.iCurrent];
       int nBlob = pIter->in.iNext - pIter->in.iCurrent;
       sessionAppendBlob(&p->constraints, aBlob, nBlob, &rc);
-      return SQLITE_OK;
+      return rc;
     }else if( p->bIgnoreNoop==0 || op!=SQLITE_DELETE 
            || eType==SQLITE_CHANGESET_CONFLICT 
     ){
@@ -5044,7 +5093,7 @@ static int sessionApplyOneOp(
     for(i=0; rc==SQLITE_OK && i<nCol; i++){
       sqlite3_value *pOld = sessionChangesetOld(pIter, i);
       sqlite3_value *pNew = sessionChangesetNew(pIter, i);
-      if( p->abPK[i] || (bPatchset==0 && pOld) ){
+      if( pOld && (p->abPK[i] || bPatchset==0) ){
         rc = sessionBindValue(pUp, i*2+2, pOld);
       }
       if( rc==SQLITE_OK && pNew ){
@@ -5170,7 +5219,321 @@ static int sessionApplyOneWithRetry(
 }
 
 /*
-** Retry the changes accumulated in the pApply->constraints buffer.
+** Create an iterator to iterate through the retry buffer pRetry.
+*/
+static int sessionRetryIterInit(
+  SessionBuffer *pRetry,          /* Buffer to iterate through */
+  int bPatchset,                  /* True for patchset, false for changeset */
+  const char *zTab,               /* Table name */
+  SessionApplyCtx *pApply,        /* Session apply context */
+  sqlite3_changeset_iter **ppIter /* OUT: New iterator */
+){
+  sqlite3_changeset_iter *pRet = 0;
+  int rc = SQLITE_OK;
+
+  rc = sessionChangesetStart(
+      &pRet, 0, 0, pRetry->nBuf, pRetry->aBuf, pApply->bInvertConstraints, 1
+  );
+  if( rc==SQLITE_OK ){
+    size_t nByte = 2*pApply->nCol*sizeof(sqlite3_value*);
+    pRet->bPatchset = bPatchset;
+    pRet->zTab = (char*)zTab;
+    pRet->nCol = pApply->nCol;
+    pRet->abPK = pApply->abPK;
+    sessionBufferGrow(&pRet->tblhdr, nByte, &rc);
+    pRet->apValue = (sqlite3_value**)pRet->tblhdr.aBuf;
+    if( rc==SQLITE_OK ){
+      memset(pRet->apValue, 0, nByte);
+    }else{
+      sqlite3changeset_finalize(pRet);
+      pRet = 0;
+    }
+  }
+
+  *ppIter = pRet;
+  return rc;
+}
+
+/*
+** Attempt to apply all the changes in retry buffer pRetry to the database.
+** Except, if parameter iSkip is greater than or equal to 0, skip change 
+** iSkip.
+*/
+static int sessionApplyRetryBuffer(
+  SessionBuffer *pRetry,          /* Buffer to apply changes from */
+  int iSkip,                      /* If >=0, index of change to omit */
+  sqlite3 *db,                    /* Database handle */
+  int bPatchset,                  /* True for patchset, false for changeset */
+  const char *zTab,               /* Name of table to write to */
+  SessionApplyCtx *pApply,        /* Apply context */
+  int(*xConflict)(void*, int, sqlite3_changeset_iter*),
+  void *pCtx                      /* First argument passed to xConflict */
+){
+  int rc = SQLITE_OK;
+  int rc2 = SQLITE_OK;
+  int ii = 0;
+  sqlite3_changeset_iter *pIter = 0;
+
+  assert( pApply->constraints.nBuf==0 );
+
+  rc = sessionRetryIterInit(pRetry, bPatchset, zTab, pApply, &pIter);
+
+  for(ii=0; rc==SQLITE_OK && SQLITE_ROW==sqlite3changeset_next(pIter); ii++){
+    if( ii!=iSkip ){
+      rc = sessionApplyOneWithRetry(db, pIter, pApply, xConflict, pCtx);
+    }
+  }
+
+  rc2 = sqlite3changeset_finalize(pIter);
+  if( rc==SQLITE_OK ) rc = rc2;
+  assert( pApply->bDeferConstraints || pApply->constraints.nBuf==0 );
+
+  return rc;
+}
+
+/*
+** Buffer aUnique[] is pApply->nCol entries in size. This function sets
+** aUnique[i] to true if column i of table zTab in the "main" database
+** of db is part of at least one UNIQUE constraint, or to false otherwise.
+**
+** If the table has a unique index on an expression, or a partial unique
+** index, all entries of aUnique[] are set to true.
+**
+** SQLITE_OK is returned if successful, or an SQLite error code otherwise.
+*/
+static int sessionUniqueColumns(
+  sqlite3 *db,                    /* Database handle */
+  const char *zTab,               /* Table name */
+  SessionApplyCtx *pApply,        /* Apply context */
+  u8 *aUnique                     /* OUT: Array of pApply->nCol flags */
+){
+  sqlite3_stmt *pList = 0;        /* PRAGMA index_list */
+  int rc = SQLITE_OK;
+
+  /* Ordinary PRAGMA statements are used here instead of the equivalent
+  ** table-valued functions (pragma_index_list() etc.) so that this works
+  ** in builds with SQLITE_OMIT_VIRTUALTABLE defined.  */
+  memset(aUnique, 0, pApply->nCol);
+  sessionPrepareMprintf(&rc, db, &pList, &pApply->zErr,
+      "PRAGMA main.index_list(%Q)", zTab
+  );
+  while( rc==SQLITE_OK && SQLITE_ROW==sqlite3_step(pList) ){
+    /* Columns of PRAGMA index_list are (seq, name, unique, origin, partial) */
+    const char *zIdx = (const char*)sqlite3_column_text(pList, 1);
+    int bUnique = sqlite3_column_int(pList, 2);
+    int bPartial = sqlite3_column_int(pList, 4);
+    sqlite3_stmt *pInfo = 0;      /* PRAGMA index_xinfo */
+
+    if( bUnique==0 ) continue;
+    sessionPrepareMprintf(&rc, db, &pInfo, &pApply->zErr,
+        "PRAGMA main.index_xinfo(%Q)", zIdx
+    );
+    while( rc==SQLITE_OK && SQLITE_ROW==sqlite3_step(pInfo) ){
+      /* Columns of PRAGMA index_xinfo are (seqno, cid, name, desc, coll, key)*/
+      int iCid = sqlite3_column_int(pInfo, 1);
+      const char *zCol = (const char*)sqlite3_column_text(pInfo, 2);
+      int bKey = sqlite3_column_int(pInfo, 5);
+      int ii;
+      if( bKey==0 ) continue;
+      for(ii=0; ii<pApply->nCol; ii++){
+        if( bPartial
+         || iCid==-2
+         || (zCol && 0==sqlite3_stricmp(zCol, pApply->azCol[ii]))
+        ){
+          aUnique[ii] = 1;
+        }
+      }
+    }
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_finalize(pInfo);
+    }else{
+      sqlite3_finalize(pInfo);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_finalize(pList);
+  }else{
+    sqlite3_finalize(pList);
+  }
+
+  return rc;
+}
+
+/*
+** Iterator pUp points to an UPDATE change. This function updates the
+** affected row to set each column modified by the UPDATE change that
+** is also part of at least one UNIQUE constraint to a "random" value,
+** and creates another UPDATE statement that may be used to later set
+** all columns modified by pUp to the actual values required by pUp.
+**
+** Each random value has the same type as the final value required by
+** pUp for the same column:
+**
+**     NULL      -> NULL
+**     INTEGER   -> random()
+**     REAL      -> random()
+**     TEXT      -> CAST(random() AS TEXT)
+**     BLOB      -> unhex(hex(random()))
+**
+** If none of the columns modified by pUp are part of a UNIQUE constraint,
+** then SQLITE_CONSTRAINT is returned.
+**
+** If successful, SQLITE_OK is returned and output variable (*ppUpdate)
+** is left pointing to a prepared UPDATE statement. It is the responsibility
+** of the caller to eventually free this statement using sqlite3_finalize().
+** Or, if an error occurs, an SQLite error code is returned and (*ppUpdate)
+** set to NULL. pApply->zErr may be set to an error message in this case.
+** Except - it is guaranteed that pApply->zErr is not set if SQLITE_CONSTRAINT
+** is returned.
+*/
+static int sessionUpdateToUpdate(
+  sqlite3 *db,                    /* Database to write to */
+  const char *zTab,               /* Table name */
+  SessionApplyCtx *pApply,        /* Apply context */
+  sqlite3_changeset_iter *pUp,    /* Iterator pointing to UPDATE change */
+  sqlite3_stmt **ppUpdate         /* OUT: UPDATE statement */
+){
+  sqlite3_stmt *pRet = 0;         /* UPDATE to set the final values */
+  sqlite3_stmt *pRand = 0;        /* UPDATE to set random values */
+  int rc = SQLITE_OK;
+  u8 *aUnique = 0;                /* aUnique[i] true if col i is UNIQUE */
+  SessionBuffer randset = {0, 0, 0};
+  SessionBuffer upset = {0, 0, 0};
+  SessionBuffer where = {0, 0, 0};
+  int ii;
+
+  aUnique = (u8*)sqlite3_malloc64(pApply->nCol);
+  if( aUnique==0 ){
+    rc = SQLITE_NOMEM;
+  }else{
+    rc = sessionUniqueColumns(db, zTab, pApply, aUnique);
+  }
+
+  /* Assuming a table structure like this:
+  **
+  **     CREATE TABLE x(a, b UNIQUE, c, d UNIQUE, e, PRIMARY KEY(a, c));
+  **
+  ** and an UPDATE change that sets column b to an integer, column d to
+  ** a text value and column e to any value, the two statements prepared
+  ** are:
+  **
+  **     UPDATE main.x SET b = random(), d = CAST(random() AS TEXT)
+  **       WHERE a IS ?1 AND c IS ?3
+  **     UPDATE main.x SET b = ?2, d = ?4, e = ?5 WHERE a IS ?1 AND c IS ?3
+  */
+  for(ii=0; rc==SQLITE_OK && ii<pApply->nCol; ii++){
+    sqlite3_value *pNew = 0;
+    if( pApply->abPK[ii] ){
+      if( where.nBuf>0 ) sessionAppendStr(&where, " AND ", &rc);
+      sessionAppendIdent(&where, pApply->azCol[ii], &rc);
+      sessionAppendPrintf(&where, &rc, " IS ?%d", ii+1);
+    }else if( (pNew = sessionChangesetNew(pUp, ii))!=0 ){
+      if( aUnique[ii] ){
+        const char *zRand = 0;
+        switch( sqlite3_value_type(pNew) ){
+          case SQLITE_NULL: zRand = "NULL"; break;
+          case SQLITE_TEXT: zRand = "CAST(random() AS TEXT)"; break;
+          case SQLITE_BLOB: zRand = "unhex(hex(random()))"; break;
+          default:          zRand = "random()"; break;
+        }
+        if( randset.nBuf>0 ) sessionAppendStr(&randset, ", ", &rc);
+        sessionAppendIdent(&randset, pApply->azCol[ii], &rc);
+        sessionAppendStr(&randset, " = ", &rc);
+        sessionAppendStr(&randset, zRand, &rc);
+      }
+      if( upset.nBuf>0 ) sessionAppendStr(&upset, ", ", &rc);
+      sessionAppendIdent(&upset, pApply->azCol[ii], &rc);
+      sessionAppendPrintf(&upset, &rc, " = ?%d", ii+1);
+    }
+  }
+
+  if( rc==SQLITE_OK && randset.nBuf==0 ){
+    /* None of the columns modified by this change are part of a UNIQUE
+    ** constraint. So setting them to random values cannot help resolve
+    ** a constraint conflict. Report this as a constraint failure. */
+    rc = SQLITE_CONSTRAINT;
+  }
+
+  sessionPrepareMprintf(&rc, db, &pRand, &pApply->zErr,
+      "UPDATE main.\"%w\" SET %s WHERE %s",
+      zTab, (char*)randset.aBuf, (char*)where.aBuf
+  );
+  sessionPrepareMprintf(&rc, db, &pRet, &pApply->zErr,
+      "UPDATE main.\"%w\" SET %s WHERE %s",
+      zTab, (char*)upset.aBuf, (char*)where.aBuf
+  );
+
+  /* Bind the PK values to both statements, and the new.* values to pRet. */
+  if( rc==SQLITE_OK ){
+    rc = sessionBindRow(
+        pUp, sqlite3changeset_old, pApply->nCol, pApply->abPK, pRand
+    );
+  }
+  if( rc==SQLITE_OK ){
+    rc = sessionBindRow(
+        pUp, sqlite3changeset_old, pApply->nCol, pApply->abPK, pRet
+    );
+  }
+  for(ii=0; rc==SQLITE_OK && ii<pApply->nCol; ii++){
+    sqlite3_value *pNew = sessionChangesetNew(pUp, ii);
+    if( pApply->abPK[ii]==0 && pNew ){
+      rc = sessionBindValue(pRet, ii+1, pNew);
+    }
+  }
+
+  /* Evaluate the statement to set each modified column of the row to a random
+  ** value. If this fails with a constraint error, SQLITE_CONSTRAINT is
+  ** returned to the caller, but pApply->zErr is not set.  */
+  if( rc==SQLITE_OK ){
+    sqlite3_step(pRand);
+    rc = sqlite3_reset(pRand);
+  }
+  sqlite3_finalize(pRand);
+
+  if( rc!=SQLITE_OK ){
+    sqlite3_finalize(pRet);
+    pRet = 0;
+  }
+  *ppUpdate = pRet;
+
+  sqlite3_free(aUnique);
+  sqlite3_free(randset.aBuf);
+  sqlite3_free(upset.aBuf);
+  sqlite3_free(where.aBuf);
+
+  return rc;
+}
+
+/*
+** Retry the changes accumulated in the pApply->constraints buffer. The
+** pApply->constraints buffer contains all changes to table zTab that
+** could not be applied due to SQLITE_CONSTRAINT errors. This function
+** attempts to apply them as follows:
+**
+**   1) It runs through the buffer and attempts to retry each change,
+**      removing any that are successfully applied from the buffer. This
+**      is repeated until no further progress can be made.
+**
+**   2) For each UPDATE change in the buffer, try the following in a
+**      savepoint transaction:
+**
+**      a) UPDATE the affected row, setting each column modified by the
+**         UPDATE change to a random value,
+**      b) Attempt step (1) with remaining changes,
+**      c) Attempt to UPDATE the affected row again, this time setting
+**         each modified column to the value required by the UPDATE change.
+**
+**      If both (a) and (c) succeed, the savepoint is committed and all
+**      successfully applied changes are removed from the buffer. Step (2)
+**      is then repeated. Otherwise, if either (a) or (c) fails with
+**      SQLITE_CONSTRAINT, the savepoint is rolled back and the next UPDATE
+**      in the buffer is tried.
+**
+**   3) Once step (2) has been attempted for each UPDATE in the change,
+**      a final attempt is made to apply each remaining change. This time,
+**      if an SQLITE_CONSTRAINT error is encountered, the conflict handler
+**      is invoked and the user has to decide whether to omit the change
+**      or rollback the entire _apply() operation.
 */
 static int sessionRetryConstraints(
   sqlite3 *db, 
@@ -5181,41 +5544,115 @@ static int sessionRetryConstraints(
   void *pCtx                      /* First argument passed to xConflict */
 ){
   int rc = SQLITE_OK;
+  int iUpdate = 0;
 
+  /* Step (1) */
   while( pApply->constraints.nBuf ){
-    sqlite3_changeset_iter *pIter2 = 0;
     SessionBuffer cons = pApply->constraints;
     memset(&pApply->constraints, 0, sizeof(SessionBuffer));
 
-    rc = sessionChangesetStart(
-        &pIter2, 0, 0, cons.nBuf, cons.aBuf, pApply->bInvertConstraints, 1
+    rc = sessionApplyRetryBuffer(
+        &cons, -1, db, bPatchset, zTab, pApply, xConflict, pCtx
     );
-    if( rc==SQLITE_OK ){
-      size_t nByte = 2*pApply->nCol*sizeof(sqlite3_value*);
-      int rc2;
-      pIter2->bPatchset = bPatchset;
-      pIter2->zTab = (char*)zTab;
-      pIter2->nCol = pApply->nCol;
-      pIter2->abPK = pApply->abPK;
-      sessionBufferGrow(&pIter2->tblhdr, nByte, &rc);
-      pIter2->apValue = (sqlite3_value**)pIter2->tblhdr.aBuf;
-      if( rc==SQLITE_OK ) memset(pIter2->apValue, 0, nByte);
-
-      while( rc==SQLITE_OK && SQLITE_ROW==sqlite3changeset_next(pIter2) ){
-        rc = sessionApplyOneWithRetry(db, pIter2, pApply, xConflict, pCtx);
-      }
-
-      rc2 = sqlite3changeset_finalize(pIter2);
-      if( rc==SQLITE_OK ) rc = rc2;
-    }
-    assert( pApply->bDeferConstraints || pApply->constraints.nBuf==0 );
 
     sqlite3_free(cons.aBuf);
     if( rc!=SQLITE_OK ) break;
-    if( pApply->constraints.nBuf>=cons.nBuf ){
-      /* No progress was made on the last round. */
-      pApply->bDeferConstraints = 0;
+
+    /* If no progress has been made this round, break out of the loop. */
+    if( pApply->constraints.nBuf>=cons.nBuf ) break;
+  }
+
+  /* Step (2) */
+  while( rc==SQLITE_OK && pApply->constraints.nBuf && !pApply->bNoUpdateLoop ){
+    SessionBuffer cons = {0, 0, 0};
+    sqlite3_changeset_iter *pUp = 0;
+    sqlite3_stmt *pUpdate = 0;
+    int iSkip = 0;
+    int bConstraint = 0;          /* True if an SQLITE_CONSTRAINT occurs */
+
+    rc = sessionRetryIterInit(
+        &pApply->constraints, bPatchset, zTab, pApply, &pUp
+    );
+    if( rc==SQLITE_OK ){
+      int iThis = -1;
+      while( SQLITE_ROW==sqlite3changeset_next(pUp) ){
+        if( pUp->op==SQLITE_UPDATE ) iThis++;
+        if( iThis==iUpdate ) break;
+        iSkip++;
+      }
+      if( iThis==iUpdate ){
+        rc = sqlite3_exec(db, "SAVEPOINT update_op", 0, 0, 0);
+        if( rc==SQLITE_OK ){
+          rc = sessionUpdateToUpdate(db, zTab, pApply, pUp, &pUpdate);
+          if( (rc&0xff)==SQLITE_CONSTRAINT ){
+            bConstraint = 1;
+            rc = SQLITE_OK;
+          }
+        }
+      }
+      sqlite3changeset_finalize(pUp);
+      if( iThis!=iUpdate ) break;
     }
+
+    if( rc==SQLITE_OK ){
+      cons = pApply->constraints;
+      if( bConstraint ){
+        memset(&pApply->constraints, 0, sizeof(SessionBuffer));
+      }
+
+      while( rc==SQLITE_OK && pApply->constraints.nBuf>0 ){
+        SessionBuffer app = pApply->constraints;
+        memset(&pApply->constraints, 0, sizeof(SessionBuffer));
+        rc = sessionApplyRetryBuffer(
+            &app, iSkip, db, bPatchset, zTab, pApply, xConflict, pCtx
+        );
+        if( app.aBuf!=cons.aBuf ){
+          sqlite3_free(app.aBuf);
+        }
+        if( pApply->constraints.nBuf>=app.nBuf ){
+          break;
+        }
+        iSkip = -1;
+      }
+    }
+
+    iUpdate++;
+    if( rc==SQLITE_OK ){
+      if( bConstraint==0 ){
+        sqlite3_step(pUpdate);
+        rc = sqlite3_finalize(pUpdate);
+        pUpdate = 0;
+        if( (rc&0xff)==SQLITE_CONSTRAINT ){
+          bConstraint = 1;
+          rc = SQLITE_OK;
+        }
+      }
+      if( bConstraint ){
+        rc = sqlite3_exec(db, "ROLLBACK TO update_op", 0, 0, 0);
+        sqlite3_free(pApply->constraints.aBuf);
+        pApply->constraints = cons;
+        memset(&cons, 0, sizeof(cons));
+      }else if( rc==SQLITE_OK ){
+        iUpdate = 0;
+      }
+      if( rc==SQLITE_OK ){
+        rc = sqlite3_exec(db, "RELEASE update_op", 0, 0, 0);
+      }
+    }
+    sqlite3_finalize(pUpdate);
+
+    sqlite3_free(cons.aBuf);
+  }
+
+  /* Step (3) */
+  if( rc==SQLITE_OK && pApply->constraints.nBuf ){
+    SessionBuffer cons = pApply->constraints;
+    memset(&pApply->constraints, 0, sizeof(SessionBuffer));
+    pApply->bDeferConstraints = 0;
+    rc = sessionApplyRetryBuffer(
+        &cons, -1, db, bPatchset, zTab, pApply, xConflict, pCtx
+    );
+    sqlite3_free(cons.aBuf);
   }
 
   return rc;
@@ -5251,10 +5688,10 @@ static int sessionChangesetApply(
   int schemaMismatch = 0;
   int rc = SQLITE_OK;             /* Return code */
   const char *zTab = 0;           /* Name of current table */
-  int nTab = 0;                   /* Result of sqlite3Strlen30(zTab) */
   SessionApplyCtx sApply;         /* changeset_apply() context object */
   int bPatchset;
   u64 savedFlag = db->flags & SQLITE_FkNoAction;
+  int bNew = 0;                   /* True for first entry of new table */
 
   assert( xConflict!=0 );
 
@@ -5269,21 +5706,23 @@ static int sessionChangesetApply(
   sApply.bRebase = (ppRebase && pnRebase);
   sApply.bInvertConstraints = !!(flags & SQLITE_CHANGESETAPPLY_INVERT);
   sApply.bIgnoreNoop = !!(flags & SQLITE_CHANGESETAPPLY_IGNORENOOP);
+  sApply.bNoUpdateLoop = !!(flags & SQLITE_CHANGESETAPPLY_NOUPDATELOOP);
   if( (flags & SQLITE_CHANGESETAPPLY_NOSAVEPOINT)==0 ){
     rc = sqlite3_exec(db, "SAVEPOINT changeset_apply", 0, 0, 0);
   }
   if( rc==SQLITE_OK ){
     rc = sqlite3_exec(db, "PRAGMA defer_foreign_keys = 1", 0, 0, 0);
   }
-  while( rc==SQLITE_OK && SQLITE_ROW==sqlite3changeset_next(pIter) ){
+  while( rc==SQLITE_OK && SQLITE_ROW==sessionChangesetNext(pIter, 0, 0,&bNew) ){
     int nCol;
     int op;
     const char *zNew;
     
     sqlite3changeset_op(pIter, &zNew, &nCol, &op, 0);
 
-    if( zTab==0 || sqlite3_strnicmp(zNew, zTab, nTab+1) ){
+    if( bNew ){
       u8 *abPK;
+      bNew = 0;
 
       rc = sessionRetryConstraints(
           db, pIter->bPatchset, zTab, &sApply, xConflict, pCtx
@@ -5318,7 +5757,6 @@ static int sessionChangesetApply(
           rc = SQLITE_NOMEM;
           break;
         }
-        nTab = (int)strlen(zTab);
         sApply.azCol = (const char **)zTab;
       }else{
         int nMinCol = 0;
@@ -5371,7 +5809,6 @@ static int sessionChangesetApply(
             sApply.bStat1 = 0;
           }
         }
-        nTab = sqlite3Strlen30(zTab);
       }
     }
 
@@ -6050,7 +6487,7 @@ static int sessionChangesetFindTable(
   if( pIter ){
     sqlite3changeset_pk(pIter, &abPK, &nCol);
   }else if( !pTab && !pGrp->db ){
-    return SQLITE_OK;
+    return SQLITE_ERROR;
   }
 
   /* If one was not found above, create a new table now */
@@ -6076,7 +6513,7 @@ static int sessionChangesetFindTable(
       if( rc || pTab->nCol==0 ){
         sqlite3_free(pTab->azCol);
         sqlite3_free(pTab);
-        return rc;
+        return rc ? rc : SQLITE_ERROR;
       }
     }
 
@@ -6223,7 +6660,12 @@ static int sessionChangesetToHash(
 
   pIter->in.bNoDiscard = 1;
   while( SQLITE_ROW==(sessionChangesetNext(pIter, &aRec, &nRec, 0)) ){
-    rc = sessionOneChangeIterToHash(pGrp, pIter, bRebase);
+    if( bRebase && pIter->bPatchset ){
+      /* A patchset may not be used as a rebase */
+      rc = SQLITE_ERROR;
+    }else{
+      rc = sessionOneChangeIterToHash(pGrp, pIter, bRebase);
+    }
     if( rc!=SQLITE_OK ) break;
   }
 
@@ -6541,14 +6983,17 @@ static void sessionAppendRecordMerge(
   u8 *a2, int n2,                 /* Record 2 */
   int *pRc                        /* IN/OUT: error code */
 ){
-  sessionBufferGrow(pBuf, n1+n2, pRc);
+  u8 *a1Eof = &a1[n1];
+  u8 *a2Eof = &a2[n2];
+
+  sessionBufferGrow(pBuf, (i64)n1+n2, pRc);
   if( *pRc==SQLITE_OK ){
     int i;
     u8 *pOut = &pBuf->aBuf[pBuf->nBuf];
     for(i=0; i<nCol; i++){
-      int nn1 = sessionSerialLen(a1);
-      int nn2 = sessionSerialLen(a2);
-      if( *a1==0 || *a1==0xFF ){
+      int nn1 = (a1<a1Eof ? sessionSerialLen(a1) : 0);
+      int nn2 = (a2<a2Eof ? sessionSerialLen(a2) : 0);
+      if( nn1==0 || (nn2>0 && (*a1==0 || *a1==0xFF)) ){
         memcpy(pOut, a2, nn2);
         pOut += nn2;
       }else{
@@ -6590,20 +7035,21 @@ static void sessionAppendPartialUpdate(
   u8 *aChange, int nChange,       /* Record to rebase against */
   int *pRc                        /* IN/OUT: Return Code */
 ){
-  sessionBufferGrow(pBuf, 2+nRec+nChange, pRc);
+  sessionBufferGrow(pBuf, (i64)2+nRec+nChange, pRc);
   if( *pRc==SQLITE_OK ){
     int bData = 0;
     u8 *pOut = &pBuf->aBuf[pBuf->nBuf];
     int i;
     u8 *a1 = aRec;
     u8 *a2 = aChange;
+    u8 *a2Eof = &a2[nChange];
 
     *pOut++ = SQLITE_UPDATE;
     *pOut++ = pIter->bIndirect;
     for(i=0; i<pIter->nCol; i++){
       int n1 = sessionSerialLen(a1);
-      int n2 = sessionSerialLen(a2);
-      if( pIter->abPK[i] || a2[0]==0 ){
+      int n2 = (a2>=a2Eof) ? 0 : sessionSerialLen(a2);
+      if( n2<=0 || pIter->abPK[i] || a2[0]==0 ){
         if( !pIter->abPK[i] && a1[0] ) bData = 1;
         memcpy(pOut, a1, n1);
         pOut += n1;
@@ -6804,8 +7250,8 @@ int sqlite3rebaser_configure(
   sqlite3_rebaser *p, 
   int nRebase, const void *pRebase
 ){
-  sqlite3_changeset_iter *pIter = 0;   /* Iterator opened on pData/nData */
   int rc;                              /* Return code */
+  sqlite3_changeset_iter *pIter = 0;   /* Iterator opened on pData/nData */
   rc = sqlite3changeset_start(&pIter, nRebase, (void*)pRebase);
   if( rc==SQLITE_OK ){
     rc = sessionChangesetToHash(pIter, &p->grp, 1);
@@ -6905,44 +7351,40 @@ int sqlite3changegroup_change_begin(
     rc = SQLITE_ERROR;
   }else{
     rc = sessionChangesetFindTable(pGrp, zTab, 0, &pTab);
+    if( pTab==0 && pzErr ){
+      *pzErr = sqlite3_mprintf("no such table: %s", zTab);
+    }
   }
   if( rc==SQLITE_OK ){
-    if( pTab==0 ){
-      if( pzErr ){
-        *pzErr = sqlite3_mprintf("no such table: %s", zTab);
-      }
-      rc = SQLITE_ERROR;
-    }else{
-      int nReq = pTab->nCol * (eOp==SQLITE_UPDATE ? 2 : 1);
-      pGrp->cd.pTab = pTab;
-      pGrp->cd.eOp = eOp;
-      pGrp->cd.bIndirect = bIndirect;
+    int nReq = pTab->nCol * (eOp==SQLITE_UPDATE ? 2 : 1);
+    pGrp->cd.pTab = pTab;
+    pGrp->cd.eOp = eOp;
+    pGrp->cd.bIndirect = bIndirect;
 
-      if( pGrp->cd.nBufAlloc<nReq ){
-        SessionBuffer *aBuf = (SessionBuffer*)sqlite3_realloc(
-            pGrp->cd.aBuf, nReq * sizeof(SessionBuffer)
+    if( pGrp->cd.nBufAlloc<nReq ){
+      SessionBuffer *aBuf = (SessionBuffer*)sqlite3_realloc(
+          pGrp->cd.aBuf, nReq * sizeof(SessionBuffer)
+      );
+      if( aBuf==0 ){
+        rc = SQLITE_NOMEM;
+      }else{
+        memset(&aBuf[pGrp->cd.nBufAlloc], 0, 
+            sizeof(SessionBuffer) * (nReq - pGrp->cd.nBufAlloc)
         );
-        if( aBuf==0 ){
-          rc = SQLITE_NOMEM;
-        }else{
-          memset(&aBuf[pGrp->cd.nBufAlloc], 0, 
-              sizeof(SessionBuffer) * (nReq - pGrp->cd.nBufAlloc)
-          );
-          pGrp->cd.aBuf = aBuf;
-          pGrp->cd.nBufAlloc = nReq;
-        }
+        pGrp->cd.aBuf = aBuf;
+        pGrp->cd.nBufAlloc = nReq;
       }
+    }
 
 #ifdef SQLITE_DEBUG
-      {
-        /* Assert that all column values are currently undefined */
-        int ii;
-        for(ii=0; ii<pGrp->cd.nBufAlloc; ii++){
-          assert( pGrp->cd.aBuf[ii].nBuf==0 );
-        }
+    {
+      /* Assert that all column values are currently undefined */
+      int ii;
+      for(ii=0; ii<pGrp->cd.nBufAlloc; ii++){
+        assert( pGrp->cd.aBuf[ii].nBuf==0 );
       }
-#endif
     }
+#endif
   }
 
   return rc;
@@ -7053,7 +7495,7 @@ int sqlite3changegroup_change_text(
   const char *pVal, 
   int nVal
 ){
-  int nText = nVal>=0 ? nVal : strlen(pVal);
+  sqlite3_int64 nText = nVal>=0 ? nVal : strlen(pVal);
   sqlite3_int64 nByte = 1 + sessionVarintLen(nText) + nText;
   int rc = SQLITE_OK;
   SessionBuffer *pBuf = 0;
@@ -7080,7 +7522,7 @@ int sqlite3changegroup_change_blob(
   const void *pVal, 
   int nVal
 ){
-  sqlite3_int64 nByte = 1 + sessionVarintLen(nVal) + nVal;
+  sqlite3_int64 nByte = 1 + sessionVarintLen(nVal) + (i64)nVal;
   int rc = SQLITE_OK;
   SessionBuffer *pBuf = 0;
 
@@ -7105,6 +7547,7 @@ int sqlite3changegroup_change_finish(
   char **pzErr
 ){
   int rc = SQLITE_OK;
+  char *zErr = 0;
   if( pGrp->cd.pTab ){
     SessionBuffer *aBuf = pGrp->cd.aBuf;
     int ii;
@@ -7116,14 +7559,14 @@ int sqlite3changegroup_change_finish(
         for(ii=0; ii<nBuf; ii++){
           if( pGrp->cd.pTab->abPK[ii] ){
             if( aBuf[ii].nBuf<=1 ){
-              *pzErr = sqlite3_mprintf(
+              zErr = sqlite3_mprintf(
                   "invalid change: %s value in PK of old.* record",
                   aBuf[ii].nBuf==1 ? "null" : "undefined"
               );
               rc = SQLITE_ERROR;
               break;
             }else if( aBuf[ii + nBuf].nBuf>0 ){
-              *pzErr = sqlite3_mprintf(
+              zErr = sqlite3_mprintf(
                   "invalid change: defined value in PK of new.* record"
               );
               rc = SQLITE_ERROR;
@@ -7131,7 +7574,7 @@ int sqlite3changegroup_change_finish(
             }
           }else 
           if( pGrp->bPatch==0 && (aBuf[ii].nBuf>0)!=(aBuf[ii+nBuf].nBuf>0) ){
-            *pzErr = sqlite3_mprintf(
+            zErr = sqlite3_mprintf(
                 "invalid change: column %d "
                 "- old.* value is %sdefined but new.* is %sdefined",
                 ii, aBuf[ii].nBuf ? "" : "un", aBuf[ii+nBuf].nBuf ? "" : "un"
@@ -7148,14 +7591,14 @@ int sqlite3changegroup_change_finish(
           if( (pGrp->cd.eOp==SQLITE_INSERT || pGrp->bPatch==0 || isPK)
            && aBuf[ii].nBuf==0
           ){
-            *pzErr = sqlite3_mprintf(
+            zErr = sqlite3_mprintf(
                 "invalid change: column %d is undefined", ii
             );
             rc = SQLITE_ERROR;
             break;
           }
           if( aBuf[ii].nBuf==1 && isPK ){
-            *pzErr = sqlite3_mprintf(
+            zErr = sqlite3_mprintf(
                 "invalid change: null value in PK"
             );
             rc = SQLITE_ERROR;
@@ -7205,6 +7648,11 @@ int sqlite3changegroup_change_finish(
     pGrp->cd.pTab = 0;
   }
 
+  if( pzErr ){
+    *pzErr = zErr;
+  }else{
+    sqlite3_free(zErr);
+  }
   return rc;
 }
 

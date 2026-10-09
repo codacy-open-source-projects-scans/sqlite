@@ -377,6 +377,10 @@ do_catchsql_test 12.3.3 {
   SELECT fts5_collist(t1, 1) FROM t1('one AND two');
 } {0 1}
 
+do_catchsql_test 12.3.4 {
+  SELECT fts5_collist(t1, 15000) FROM t1('one AND two');
+} {1 SQLITE_RANGE}
+
 #-------------------------------------------------------------------------
 reset_db
 do_execsql_test 13.1 {
@@ -400,5 +404,88 @@ sqlite3 db test.db
 do_catchsql_test 13.4 {
   SELECT highlight(t1, 0, '[', ']') FROM t1
 } {1 {SQL logic error}}
+
+#-------------------------------------------------------------------------
+
+foreach_detail_mode $testprefix {
+  reset_db
+  fts5_aux_test_functions db
+
+  do_execsql_test 14.0 {
+    CREATE VIRTUAL TABLE t1 USING fts5(x, detail=%DETAIL%);
+    INSERT INTO t1 VALUES('one two three');
+    INSERT INTO t1 VALUES('three two one');
+  }
+
+  do_catchsql_test 14.1 {
+    SELECT fts5_collist(t1, 15000) FROM t1('one AND two');
+  } {1 SQLITE_RANGE}
+
+  do_catchsql_test 14.2 {
+    SELECT fts5_collist(t1, 0) FROM t1('one AND two');
+  } {0 {0 0}}
+
+  do_catchsql_test 14.3 {
+    SELECT fts5_collist(t1, 0) FROM t1('one AND two') ORDER BY rank;
+  } {0 {0 0}}
+
+  do_catchsql_test 14.3 {
+    SELECT fts5_collist(t1, 15000) FROM t1('one AND two') ORDER BY rank;
+  } {1 SQLITE_RANGE}
+}
+
+#-------------------------------------------------------------------------
+# Test that highlight() and snippet() handle column-number arguments that
+# are too large or too small to fit in a 32-bit signed integer in the
+# same way as other out-of-range values of the same sign.
+#
+reset_db
+do_execsql_test 15.0 {
+  CREATE VIRTUAL TABLE t1 USING fts5(a, b);
+  INSERT INTO t1 VALUES('one two three', 'four five six');
+}
+
+foreach {tn iCol} {
+  1  2
+  2  -1
+  3  2147483648
+  4  -2147483649
+  5  4294967295
+  6  4294967296
+  7  4294967297
+  8  -4294967295
+  9  -4294967296
+  10 9223372036854775807
+  11 -9223372036854775808
+} {
+  do_execsql_test 15.1.$tn {
+    SELECT quote(highlight(t1, $iCol, '[', ']')) FROM t1('one OR five');
+  } {''}
+}
+
+foreach {tn iCol} {
+  1  -1
+  2  -2147483649
+  3  -4294967295
+  4  -4294967296
+  5  -9223372036854775808
+} {
+  do_execsql_test 15.2.$tn {
+    SELECT snippet(t1, $iCol, '[', ']', '...', 5) FROM t1('five');
+  } {{four [five] six}}
+}
+
+foreach {tn iCol} {
+  1  2
+  2  2147483648
+  3  4294967295
+  4  4294967296
+  5  4294967297
+  6  9223372036854775807
+} {
+  do_catchsql_test 15.3.$tn {
+    SELECT snippet(t1, $iCol, '[', ']', '...', 5) FROM t1('one OR five');
+  } {1 {column index out of range}}
+}
 
 finish_test

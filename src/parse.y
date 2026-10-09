@@ -784,6 +784,7 @@ seltablist(A) ::= stl_prefix(A) nm(Y) dbnm(D) LP exprlist(E) RP as(Z) on_using(N
         SrcItem *pOld = F->a;
         assert( pOld->fg.fixedSchema==0 );
         pNew->zName = pOld->zName;
+        pOld->zName = 0;
         assert( pOld->fg.fixedSchema==0 );
         if( pOld->fg.isSubquery ){
           pNew->fg.isSubquery = 1;
@@ -803,8 +804,13 @@ seltablist(A) ::= stl_prefix(A) nm(Y) dbnm(D) LP exprlist(E) RP as(Z) on_using(N
           pOld->u1.pFuncArg = 0;
           pOld->fg.isTabFunc = 0;
           pNew->fg.isTabFunc = 1;
+        }else if( pOld->fg.isIndexedBy ){
+          pNew->u1.zIndexedBy = pOld->u1.zIndexedBy;
+          pOld->u1.zIndexedBy = 0;
+          pOld->fg.isIndexedBy = 0;
+          pNew->fg.isIndexedBy = 1;
         }
-        pOld->zName = 0;
+        pNew->fg.notIndexed = pOld->fg.notIndexed;
       }
       sqlite3SrcListDelete(pParse->db, F);
     }else{
@@ -1334,9 +1340,11 @@ expr(A) ::= LP nexprlist(X) COMMA expr(Y) RP. {
   ExprList *pList = sqlite3ExprListAppend(pParse, X, Y);
   A = sqlite3PExpr(pParse, TK_VECTOR, 0, 0);
   if( A ){
+    int i;
     A->x.pList = pList;
-    if( ALWAYS(pList->nExpr) ){
-      A->flags |= pList->a[0].pExpr->flags & EP_Propagate;
+    for(i=0; i<pList->nExpr; i++){
+      assert( pList->a[i].pExpr!=0 );
+      A->flags |= pList->a[i].pExpr->flags & EP_Propagate;
     }
   }else{
     sqlite3ExprListDelete(pParse->db, pList);
@@ -1510,7 +1518,11 @@ expr(A) ::= expr(A) between_op(N) expr(X) AND expr(Y). [BETWEEN] {
       }
     }else{
       Expr *pRHS = Y->a[0].pExpr;
-      if( Y->nExpr==1 && sqlite3ExprIsConstant(pParse,pRHS) && A->op!=TK_VECTOR ){
+      if( Y->nExpr==1
+       && sqlite3ExprIsConstant(pParse,pRHS)
+       && pRHS->op!=TK_COLLATE
+       && A->op!=TK_VECTOR
+      ){
         Y->a[0].pExpr = 0;
         sqlite3ExprListDelete(pParse->db, Y);
         pRHS = sqlite3PExpr(pParse, TK_UPLUS, pRHS, 0);
@@ -1910,11 +1922,11 @@ cmd ::= ALTER TABLE fullname(X) ALTER kwcolumn_opt nm(Y) DROP NOT NULL. {
 cmd ::= ALTER TABLE fullname(X) ALTER kwcolumn_opt nm(Y) SET NOT(Z) NULL onconf. {
   sqlite3AlterSetNotNull(pParse, X, &Y, &Z);
 }
-cmd ::= ALTER TABLE fullname(X) ADD CONSTRAINT(Y) nm(Z) CHECK LP(A) expr RP(B) onconf. {
-  sqlite3AlterAddConstraint(pParse, X, &Y, &Z, A.z+1, (B.z-A.z-1));
+cmd ::= ALTER TABLE fullname(X) ADD CONSTRAINT(Y) nm(Z) CHECK LP(A) expr(E) RP(B) onconf. {
+  sqlite3AlterAddConstraint(pParse, X, &Y, &Z, A.z+1, (B.z-A.z-1), E);
 }
-cmd ::= ALTER TABLE fullname(X) ADD CHECK(Y) LP(A) expr RP(B) onconf. {
-  sqlite3AlterAddConstraint(pParse, X, &Y, 0, A.z+1, (B.z-A.z-1));
+cmd ::= ALTER TABLE fullname(X) ADD CHECK(Y) LP(A) expr(E) RP(B) onconf. {
+  sqlite3AlterAddConstraint(pParse, X, &Y, 0, A.z+1, (B.z-A.z-1), E);
 }
 
 kwcolumn_opt ::= .

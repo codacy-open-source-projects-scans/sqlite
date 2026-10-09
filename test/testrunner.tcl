@@ -113,6 +113,7 @@ Usage:
     $a0 joblist ?PATTERN?
     $a0 njob ?NJOB?
     $a0 retest
+    $a0 make CONFIG TARGETS
     $a0 script ?-msvc? CONFIG
     $a0 status ?-d SECS? ?--cls?
 
@@ -136,6 +137,7 @@ Special values for PERMUTATION include:
     mdevtest  - tests recommended prior to normal development check-ins.
     devtest   - alias for "mdevtest"
     release   - full release test with various builds.
+    c         - tests in test/c directory only.
     sdevtest  - like mdevtest but using ASAN and UBSAN.
     all       - all tcl test scripts, plus a subset of test scripts rerun
                 with various permutations.
@@ -170,6 +172,8 @@ as complete.  Testing will halt when all tests currently running complete.
 
 The "clean" command removes files and directories created by a prior
 invocation of testrunner.tcl.
+
+The "make" command runs "make" configured for the specific CONFIG.
 
 The "script" command outputs the script used to build a configuration.
 Add the "-msvc" option for a Windows-compatible script. For a list of
@@ -235,6 +239,33 @@ proc default_njob {} {
   }
   return $nHelper
 }
+
+# Return true if the current test is using Fil-C. False otherwise.
+#
+proc is_fil_cc {} {
+  set ret 0
+  if {[catch { exec $::env(CC) --version } msg]==0 
+   && [string first Fil-C $msg]>=0
+  } {
+    set ret 1
+  }
+  return $ret
+}
+
+# Return the default value for the -nbuild switch. This value limits the
+# number of build jobs that may be run concurrently. Usually there is
+# no special limit for this, but with Fil-C the compiler has been observed
+# using up to 8GB of memory to build sqlite3.c, so in this case the default
+# limit is two concurrent builds.
+#
+proc default_nbuild {} {
+  set ret -1
+  if {$::TRG(fil-cc)} {
+    set ret 2
+  }
+  return $ret
+}
+
 #-------------------------------------------------------------------------
 
 #-------------------------------------------------------------------------
@@ -245,7 +276,9 @@ set TRG(logname) [file normalize testrunner.log]
 set TRG(build.logname) [file normalize testrunner_build.log]
 set TRG(info_script) [file normalize [info script]]
 set TRG(timeout) 10000              ;# Default busy-timeout for testrunner.db 
+set TRG(fil-cc)  [is_fil_cc]        ;# True for fil-cc on Linux */
 set TRG(nJob)    [default_njob]     ;# Default number of helper processes
+set TRG(nBuild)  [default_nbuild]   ;# Default number of max build processes
 set TRG(patternlist) [list]
 set TRG(cmdline) $argv
 set TRG(reporttime) 2000
@@ -280,6 +313,9 @@ switch -nocase -glob -- $tcl_platform(os) {
     set TRG(run)         run.sh
     set TRG(runcmd)      "bash run.sh"
   }
+  *freebsd* -
+  *netbsd* -
+  *dragonfly* -
   *openbsd* {
     set TRG(platform)    linux
     set TRG(make)        make.sh
@@ -305,8 +341,8 @@ switch -nocase -glob -- $tcl_platform(os) {
       set TRG(platform)  cygwin
       set TRG(make)      make.sh
       set TRG(makecmd)   "bash make.sh"
-      set TRG(testfixture) testfixture
-      set TRG(shell)       sqlite3
+      set TRG(testfixture) testfixture.exe
+      set TRG(shell)       sqlite3.exe
       set TRG(run)       run.sh
       set TRG(runcmd)    "bash run.sh"
     }
@@ -582,6 +618,87 @@ if {[string compare -nocase script [lindex $argv 0]]==0} {
   set config [lindex $argv [expr [llength $argv]-1]]
 
   puts [trd_buildscript $config [file dirname $testdir] $bMsvc]
+  exit
+}
+
+#--------------------------------------------------------------------------
+# Check if this is the "make" command.  Example:
+#
+#    test/testrunner.tcl make Debug-Two clean testfixture
+#                             \_______/ \_______________/
+#         Configuration ----------^            ^---------- Arguments to "make"
+#
+# This works by running the equivalent of "testrunner.tcl script" to generate
+# the approprate shell script or BAT file, then invoking that script.  The 
+# generated script is usually deleted automatically, but that can be suppressed
+# using the --keep option.
+#
+if {[string compare -nocase "make" [lindex $argv 0]]==0} {
+  set bKeep 0
+  set bDryRun 0
+  set Config {}
+  set MakeArgs [list]
+  for {set i 1} {$i<[llength $argv]} {incr i} {
+    set arg [lindex $argv $i]
+    if {$arg eq "-keep" || $arg eq "--keep"} {
+      set bKeep 1
+      continue
+    }
+    if {[regexp {^--?dry-?run$} $arg] || [regexp {^--?n$} $arg]} {
+      set bDryRun 1
+      continue
+    }
+    if {$Config eq ""} {
+      if {![info exists ::trd::build($arg)]} {
+        puts stderr "No such configuration: $arg"
+        puts stderr "Should be one of: [lsort [array names ::trd::build]]"
+        exit 1
+      }
+      set Config $arg
+      continue
+    }
+    lappend MakeArgs $arg
+  }
+  if {$Config eq ""} {
+    puts stderr "Missing configuration name"
+    puts stderr "Run \"$argv0 help\" for help"
+    exit 1
+  }
+  set scriptname testrunner-[expr {int(rand()*1000000)}][clock seconds]
+  if {$tcl_platform(platform) eq "windows"} {
+    set bMsvc 1
+    append scriptname .bat
+  } else {
+    set bMsvc 0
+    append scriptname .sh
+  }
+  if {$bDryRun} {
+    puts "Script \"$scriptname\" would have been:"
+    puts [trd_buildscript $Config [file dirname $testdir] $bMsvc $MakeArgs]
+    exit 0
+  }
+  set fd [open $scriptname w]
+  puts $fd [trd_buildscript $Config [file dirname $testdir] $bMsvc $MakeArgs]
+  close $fd
+  if {$bMsvc} {
+    set rc [catch {
+      exec $scriptname >@stdout
+    } msg]
+    set rc 0
+  } else {
+    set rc [catch {
+      exec sh $scriptname >@stdout 2>@stderr
+    } msg]
+  }
+  if {$bKeep} {
+    puts "script retained in \"$scriptname\"
+  } else {
+    file delete -force $scriptname
+  }
+  if {$rc} {
+    puts stderr "make failed: $msg"
+    exit 1
+  }
   exit
 }
 
@@ -952,6 +1069,10 @@ for {set ii 0} {$ii < [llength $argv]} {incr ii} {
       } else {
         set TRG(fullstatus) 1
       }
+    } elseif {($n>2 && [string match "$a*" --nbuild]) || $a=="-nb"} {
+      incr ii
+      set TRG(nBuild) [lindex $argv $ii]
+      if {$isLast} { usage }
     } else {
       usage
     }
@@ -1030,22 +1151,36 @@ proc r_write_db {tcl} {
 }
 
 # Obtain a new job to be run by worker $iJob (an integer). A job is
-# returned as a three element list:
-#
-#    {$build $config $file}
+# returned as a serialized array containing all fields from the "jobs"
+# table. 
 #
 proc r_get_next_job {iJob} {
   global T
-
-  if {($iJob%2)} {
-    set orderby "ORDER BY priority ASC"
-  } else {
-    set orderby "ORDER BY priority DESC"
-  }
-
-  set ret [list]
+  global TRG
+  set orderby ""
 
   r_write_db {
+    # If the TRG(nBuild) variable is greater than 0, count how many builds 
+    # are running already. If there are $TRG(nBuild) or more, ensure that
+    # something other than a build is selected to run next.
+    #
+    if {$TRG(nBuild)>0} {
+      set n [trdb one {
+        SELECT count(*) FROM jobs WHERE state='running' AND displaytype='bld'
+      }]
+      if {$n>=$TRG(nBuild)} {
+        set orderby "AND displaytype!='bld' "
+      }
+    }
+
+    if {($iJob%2)} {
+      append orderby "ORDER BY priority ASC"
+    } else {
+      append orderby "ORDER BY priority DESC"
+    }
+
+    set ret [list]
+
     set query "
       SELECT * FROM jobs AS j WHERE state='ready' $orderby LIMIT 1
     " 
@@ -1235,10 +1370,6 @@ proc add_tcl_jobs {build config patternlist {shelldepid ""}} {
   # The ::testspec array is populated by permutations.test
   foreach f [dict get $::testspec($config) -files] {
 
-    if {![job_matches_any_pattern $patternlist "$config [file tail $f]"]} {
-      continue
-    }
-
     if {[file pathtype $f]!="absolute"} { set f [file join $::testdir $f] }
     set f [file normalize $f]
 
@@ -1251,6 +1382,10 @@ proc add_tcl_jobs {build config patternlist {shelldepid ""}} {
     }
     if {$build!=""} {
       set displayname "[lindex $build 2] $displayname"
+    }
+
+    if {![job_matches_any_pattern $patternlist $displayname]} {
+      continue
     }
 
     set lProp [trd_test_script_properties $f]
@@ -1268,10 +1403,7 @@ proc add_tcl_jobs {build config patternlist {shelldepid ""}} {
         -cmd $cmd                      \
         -depid $depid                  \
         -priority $priority
-  }
-  if {$ntcljob==0 && [llength $build]>0} {
-    set bldid [lindex $build 0]
-    trdb eval {DELETE FROM jobs WHERE rowid=$bldid}
+
   }
 }
 
@@ -1305,7 +1437,7 @@ proc add_build_job {buildname target {postcmd ""} {depid ""}} {
 # Add jobs to build and run all the *.c files in $testdir/c/ for build
 # configuration $buildname.
 # 
-proc add_c_jobs {buildname} {
+proc add_c_jobs {buildname patternlist} {
   global TRG
 
   set dir [file join $::testdir c]
@@ -1340,6 +1472,9 @@ proc add_c_jobs {buildname} {
       }
       append cmd "AUXTEST=$prg $TRG(makecmd) $prg\n"
       append cmd "./$prg\n"
+    }
+    if {![job_matches_any_pattern $patternlist "$prg ($buildname)"]} {
+      continue
     }
     
     set id [add_job                                \
@@ -1392,7 +1527,7 @@ proc add_fuzztest_jobs {buildname patternlist} {
   global env TRG
   # puts buildname=$buildname
 
-  foreach {interpreter scripts} [trd_fuzztest_data $buildname] {
+  foreach {interpreter scripts} [trd_fuzztest_data $buildname $TRG(fil-cc)] {
     set bldDone 0
     set subcmd [lrange $interpreter 1 end]
     set interpreter [lindex $interpreter 0]
@@ -1442,7 +1577,7 @@ proc add_fuzztest_jobs {buildname patternlist} {
         set tail [lrange $s 0 end-1]
         lappend tail [file tail $fname]
       }
-      if {![job_matches_any_pattern $patternlist "$interpreter $tail"]} {
+      if {![job_matches_any_pattern $patternlist "$buildname $interpreter $tail"]} {
         continue
       }
       if {!$bldDone} {
@@ -1601,7 +1736,14 @@ proc add_jobs_from_cmdline {patternlist} {
           }
         }
 
-        add_c_jobs $b
+        add_c_jobs $b $patternlist
+      }
+    }
+
+    c {
+      set patternlist [lrange $patternlist 1 end]
+      foreach b [trd_builds $TRG(platform)] {
+        add_c_jobs $b $patternlist
       }
     }
 
@@ -1705,6 +1847,29 @@ proc mark_job_as_finished {jobid output state endtm} {
   }
 }
 
+# We want to stop running tests.  Do this in an orderly way that
+# avoids confusing Windows.  (On unix we just invoke "exit 1".)
+#
+proc orderly_shutdown {} {
+  global tcl_platform
+  if {$tcl_platform(platform) ne "windows"} {
+    # Non-Windows platform can just call exit and the OS stops everything
+    # for us automatically.
+    exit 1
+  }
+
+  # Only windows reaches this point.  Mark pending jobs as 'halt' to prevent
+  # them from being scheduled.  Let running jobs continue to completion.
+  #
+  set n [trdb one {SELECT count(*) FROM jobs WHERE state='running'}]
+  trdb eval {UPDATE jobs SET state='halt' WHERE state in ('ready','')}
+  if {$n>1} {
+    incr n -1
+    puts "Deferred shutdown: Waiting on $n running tasks to complete."
+  }
+}
+
+
 proc script_input_ready {fd iJob jobid} {
   global TRG
   global O
@@ -1729,12 +1894,14 @@ proc script_input_ready {fd iJob jobid} {
       puts [format %-79.79s "FAILED: $job(displayname) ($iJob)"]
       set state "failed" 
       if {$TRG(stopOnError)} {
-        puts "OUTPUT: $O($iJob)"
-        exit 1
+        puts "Stopping due to errors in $job(displayname)..."
+        # puts "OUTPUT: $O($iJob)"
+        orderly_shutdown
       }
       if {$TRG(stopOnCore) && [string first {core dumped} $O($iJob)]>0} {
-        puts "OUTPUT: $O($iJob)"
-        exit 1
+        puts "Stopping due to core dump in $job(displayname)..."
+        # puts "OUTPUT: $O($iJob)"
+        orderly_shutdown
       }
     }
 
@@ -1758,7 +1925,6 @@ proc script_input_ready {fd iJob jobid} {
       append O($iJob) "$line\n"
     }
   }
-
 }
 
 proc dirname {ii} {
@@ -2037,6 +2203,15 @@ if {[llength $TRG(patternlist)]==1 && $TRG(patternlist) eq "retest"} {
   handle_retest
 } else {  
   set tm [lindex [time { make_new_testset }] 0]
+  if {[llength $TRG(patternlist)]>0} {
+    r_write_db {
+      trdb eval {
+        DELETE FROM jobs
+         WHERE displaytype='bld'
+           AND NOT EXISTS(SELECT 1 FROM jobs chld WHERE chld.depid=jobs.jobid)
+      }
+    }
+  }
 }
 if {$TRG(explain)} {
   explain_tests
@@ -2052,6 +2227,3 @@ if {$TRG(explain)} {
 }
 trdb close
 exit $exit_status
-
-
-
