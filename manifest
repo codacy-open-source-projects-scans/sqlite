@@ -1,5 +1,5 @@
-C Merge\sbranch-3.54\sfixes\sinto\strunk
-D 2026-10-18T23:51:22.415
+C Fix\sa\svec1\sproblem\swith\squerying\sa\stable\swithin\sthe\ssame\stransaction\sas\swriting\sit\sin\ssome\sconfigurations.
+D 2026-10-19T11:06:06.382
 F .fossil-settings/binary-glob 61195414528fb3ea9693577e1980230d78a1f8b0a54c78cf1b9b24d0a409ed6a x
 F .fossil-settings/empty-dirs dbb81e8fc0401ac46a1491ab34a7f2c7c0452f2f06b54ebb845d024ca8283ef1
 F .fossil-settings/ignore-glob 35175cdfcf539b2318cb04a9901442804be81cd677d8b889fcc9149c21f239ea
@@ -603,7 +603,7 @@ F ext/vec1/test/vec1cat2.test 9e0d9a9cfa33b6aade9150c73064be53e52de9d693f53b7600
 F ext/vec1/test/vec1config.test fa0d8e3c83fd5ceeb36b7c481f9207e15f17020357ecde1b243fe03b12cea1b0
 F ext/vec1/test/vec1corrupt.test 59bbe16f0dd5cfda27c4d851a1fda14d8a13d6fa1eead79d587172d3170d628e
 F ext/vec1/test/vec1create.test fdf7dc7d4e62d5654c1ac27bb9aea9451f024280dce5d0ec97d2698a040b3914
-F ext/vec1/test/vec1delete.test 1dc56bbc8a6753991dbc8cdca558a933ae6280c01bee261b1b2561e0390b57e6
+F ext/vec1/test/vec1delete.test 91a3a1c7328cb8960687b81790ac69c676409e3aff83a9a68f3bf3e8d32efc91
 F ext/vec1/test/vec1error.test 3d1b74cd535dd5c9d303309f0b18ec606b100139a6483cbbd495b0aa3a9c8a09
 F ext/vec1/test/vec1fault1.test 8b34a9e68a9877db43707cdfdd388f229f8267793475ceb828dd931afe6fd3b6
 F ext/vec1/test/vec1fault2.test 3863f5d553e19a8dafafc2b976c295a62e33075373be204b81a9b714b2062295
@@ -614,6 +614,7 @@ F ext/vec1/test/vec1fault6.test 4f86d9fbd31552a1461e2dcdf350b4d5413b5536382a669a
 F ext/vec1/test/vec1fault7.test 92ebab2b519e79c41be71ef3f9f438f4a3358b475164c41288d674be102a1d24
 F ext/vec1/test/vec1fault8.test a2da772d96539b25574cc4cf0cdcf291931da1a416a6883662e10f5c92275c69
 F ext/vec1/test/vec1fault9.test 150a88218168844e80f1f600c7cd3189f01e05b69f8c899c0ef42997f51846ee
+F ext/vec1/test/vec1faultA.test d75deb7e4f9cc96934a92d9f03ec57b54109dd8dec40c1af64fec9c041284202
 F ext/vec1/test/vec1fixed.test 9f1ecc7a67bfe1afb8a3c9e173c2f7990b14f0ad1bbb869d6fe30d247d3b2271
 F ext/vec1/test/vec1flat.test e6fbbe5dd6a46019d5913a427a9d80e25771694a7db0c51ecb60ecb96c8c49b1
 F ext/vec1/test/vec1func.test e27a3aed8abc7dcea38ec87ccd8f91d30eba551fe1cc1e9f9b0e39cee9ce574d
@@ -630,6 +631,7 @@ F ext/vec1/test/vec1nan.test 3ff3fe4b0f33a5c1f4129ba318443e7d927fd9dd6fc339349fe
 F ext/vec1/test/vec1overflow.test f007c6b149b434bc6593501c48214535151cb989620e18d48dbca51e7d9c98c7
 F ext/vec1/test/vec1pq.test 81d74f516971a3883782d2d443efe3f6a7501d4c9f980a758e1c2eb8b5f22885
 F ext/vec1/test/vec1query.test 7120a2824b9f6563f7986c436204870c9d6e4af2bff3a39d38ef277188ef9189
+F ext/vec1/test/vec1rebuild.test 1f801376985dfd73b0d4b7a8f4c76fe682865b0d77e46df011093d035809be04
 F ext/vec1/test/vec1rollback.test 41565f526e153b24615ed38edda835fbb185f2f07f5e72f5c947add810b33d71
 F ext/vec1/test/vec1rotate.test a90773e8ef8259f81c793cb335e3c023295231416c37d89e387d524304dadfde
 F ext/vec1/test/vec1rotate2.test 7e4e06b3f970190c4ac28256db7aa924796b9a1fe1985941e35db4604c8717a0
@@ -645,7 +647,7 @@ F ext/vec1/tool/vec1_algo_test.c 2777488a8b9ab9545732562c93988aa2424d7afd8b4895d
 F ext/vec1/tool/vec1bench.tcl a117caee3cb99712f0477fe2fa85c94c260866951d3a9d667b62631b480c2d2d
 F ext/vec1/tool/vec1bench_addcols.tcl 8c509253d07b179928f2ee32e3591a2c70d13c914217e1328c01afa148717051
 F ext/vec1/tool/vec1bench_vibe2db.py 84ddb0236bc3d02a0393abce41986a1b7dad7f0d83884576f8318c2883e3aed3
-F ext/vec1/vec1.c 2fb9e66a03d9c33e6233e58be75b75dd98ba9c982869c58ddf5160e82a0d9885
+F ext/vec1/vec1.c 7c930e6b5577622326dcf32569318f06d5f73fcc81912e43fb258f3ce396b00e
 F ext/wasm/GNUmakefile d93df7101619ae363f431704bb77c0e683240e4d9e7edfb32a0e96e31c23f214
 F ext/wasm/README-dist.txt f01081a850ce38a56706af6b481e3a7878e24e42b314cfcd4b129f0f8427066a
 F ext/wasm/README.md 6d820c98468ebcee1dbf547467a03f65d256a2be48a9dcbeb5637d3da569c6fe
@@ -2292,8 +2294,8 @@ F tool/warnings-clang.sh bbf6a1e685e534c92ec2bfba5b1745f34fb6f0bc2a362850723a9ee
 F tool/warnings.sh a554d13f6e5cf3760f041b87939e3d616ec6961859c3245e8ef701d1eafc2ca2
 F tool/win/sqlite.vsix deb315d026cc8400325c5863eef847784a219a2f
 F tool/winmain.c 00c8fb88e365c9017db14c73d3c78af62194d9644feaf60e220ab0f411f3604c
-P 080338a91b447c12186bbb4e23da1927ca448fee9a11cd6507f5f2041ee2dcba b4974127526b290149447849bf9c24c9ea01678755a58af3843c9e2c73c417d2
-R 53023e6f30039eb862d0ec6c68e07090
-U drh
-Z 6f95cb342072eb282c52020872de7136
+P 2448fc46cae2149c5d1777b9fe574a48e21d5e16dd64997d2343bb6e160840e3
+R 09d3e97e7e8cbf0049f0f65dd688ee61
+U dan
+Z adafb80534c463cf81e26d72578b22d5
 # Remove this line to create a well-formed Fossil manifest.
