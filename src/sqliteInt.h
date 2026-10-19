@@ -1574,7 +1574,7 @@ struct Schema {
 ** The number of different kinds of things that can be limited
 ** using the sqlite3_limit() interface.
 */
-#define SQLITE_N_LIMIT (SQLITE_LIMIT_TRIGGER_STEPS+1)
+#define SQLITE_N_LIMIT (SQLITE_LIMIT_CTES+1)
 
 /*
 ** Lookaside malloc is a set of fixed-size buffers that can be used
@@ -5284,6 +5284,7 @@ int sqlite3ExprTruthValue(const Expr*);
 int sqlite3ExprIsConstant(Parse*,Expr*);
 int sqlite3ExprIsConstantOrFunction(Expr*, u8);
 int sqlite3ExprIsConstantOrGroupBy(Parse*, Expr*, ExprList*);
+int sqlite3ExprIsTableConstant(Expr*,int,int);
 int sqlite3ExprIsSingleTableConstraint(Expr*,const SrcList*,int,int);
 int sqlite3ExprListIsConstant(Parse *pParse, ExprList *pList, int bNoIs);
 int sqlite3ExprContainsSubquery(Expr*);

@@ -2303,7 +2303,7 @@ int sqlite3ColumnsFromExprList(
     nCol = pEList->nExpr;
     aCol = sqlite3DbMallocZero(db, sizeof(aCol[0])*nCol);
     testcase( aCol==0 );
-    if( NEVER(nCol>32767) ) nCol = 32767;
+    if( nCol>32767 ) nCol = 32767;
   }else{
     nCol = 0;
     aCol = 0;
@@ -4124,7 +4124,9 @@ static int renumberCursorsCb(Walker *pWalker, Expr *pExpr){
   if( op==TK_COLUMN || op==TK_IF_NULL_ROW ){
     renumberCursorDoMapping(pWalker, &pExpr->iTable);
   }
-  if( ExprHasProperty(pExpr, EP_OuterON) ){
+  if( ExprHasProperty(pExpr, (EP_OuterON|EP_InnerON)) ){
+    testcase( ExprHasProperty(pExpr, EP_OuterON) );
+    testcase( ExprHasProperty(pExpr, EP_InnerON) );
     renumberCursorDoMapping(pWalker, &pExpr->w.iJoin);
   }
   return WRC_Continue;
@@ -5004,7 +5006,7 @@ static int propagateConstantExprRewrite(Walker *pWalker, Expr *pExpr){
 **
 ** If the WHERE clause contains terms of the form COLUMN=CONSTANT or
 ** CONSTANT=COLUMN that are top-level AND-connected terms that are not
-** part of a ON clause from a LEFT JOIN, then throughout the query
+** part of a ON clause from an OUTER JOIN, then throughout the query
 ** replace all other occurrences of COLUMN with CONSTANT.
 **
 ** For example, the query:
@@ -5897,15 +5899,13 @@ static int resolveFromTermToCte(
       pRecTerm = pRecTerm->pPrior;
     }
 
-#if SQLITE_MAX_EXPR_DEPTH>0
-    if( pParse->nTab>=db->aLimit[SQLITE_LIMIT_EXPR_DEPTH] ){
-      /* Bug 2026-10-04T05:35:14Z: Prevent nested CTEs from generating
-      ** an exponential number of cursors.  The error message here will
-      ** be "Nested too deep", which isn't exactly correct, but it is
-      ** sufficient, and we don't want to use extra code space for more
-      ** detail on such an obscure error. */
-      pParse->nNestSel = pParse->nTab;
+    if( pParse->nTab >= db->aLimit[SQLITE_LIMIT_CTES]
+     && db->aLimit[SQLITE_LIMIT_CTES]>0
+    ){
+      sqlite3ErrorMsg(pParse, "too many CTEs");
+      return 2;
     }
+#if SQLITE_MAX_EXPR_DEPTH>0
     pParse->nNestSel++;
     if( checkSubqueryNestingDepth(pParse) ) return 2;
 #endif
@@ -6272,6 +6272,7 @@ static int selectExpander(Walker *pWalker, Select *p){
           assert( ExprUseWOfst(pE->pLeft) );
           iErrOfst = pE->pRight->w.iOfst;
         }else{
+          assert( pE->pLeft==0 );
           assert( ExprUseWOfst(pE) );
           iErrOfst = pE->w.iOfst;
         }
@@ -6394,6 +6395,7 @@ static int selectExpander(Walker *pWalker, Select *p){
               pLeft = sqlite3Expr(db, TK_ID, zTabName);
               pExpr = sqlite3PExpr(pParse, TK_DOT, pLeft, pRight);
               if( IN_RENAME_OBJECT && pE->pLeft ){
+                assert( pE->op==TK_DOT && pE->pRight->op==TK_ASTERISK );
                 sqlite3RenameTokenRemap(pParse, pLeft, pE->pLeft);
               }
               if( zSchemaName ){

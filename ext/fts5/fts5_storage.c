@@ -83,9 +83,11 @@ static int fts5StorageGetStmt(
   Fts5Storage *p,                 /* Storage handle */
   int eStmt,                      /* FTS5_STMT_XXX constant */
   sqlite3_stmt **ppStmt,          /* OUT: Prepared statement handle */
-  char **pzErrMsg                 /* OUT: Error message (if any) */
+  char **pzErrMsg                 /* OUT: Error message (if any) (not used) */
 ){
   int rc = SQLITE_OK;
+
+  (void)pzErrMsg;
 
   /* If there is no %_docsize table, there should be no requests for 
   ** statements to operate on it.  */
@@ -202,13 +204,13 @@ static int fts5StorageGetStmt(
       rc = sqlite3_prepare_v3(pC->db, zSql, -1, f, &p->aStmt[eStmt], 0);
       p->pConfig->bLock--;
       sqlite3_free(zSql);
-      if( rc!=SQLITE_OK && pzErrMsg ){
-        *pzErrMsg = sqlite3_mprintf("%s", sqlite3_errmsg(pC->db));
-      }
       if( rc==SQLITE_ERROR && eStmt>FTS5_STMT_LOOKUP2 && eStmt<FTS5_STMT_SCAN ){
         /* One of the internal tables - not the %_content table - is missing.
         ** This counts as a corrupted table.  */
-       rc = SQLITE_CORRUPT;
+       rc = SQLITE_CORRUPT_VTAB;
+      }else if( rc!=SQLITE_OK && p->pConfig->pzErrmsg ){
+        assert( *p->pConfig->pzErrmsg==0 );
+        *p->pConfig->pzErrmsg = sqlite3_mprintf("%s", sqlite3_errmsg(pC->db));
       }
     }
   }

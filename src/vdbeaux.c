@@ -72,6 +72,7 @@ void sqlite3VdbeSetSql(Vdbe *p, const char *z, int n, u8 prepFlags){
   p->prepFlags = prepFlags;
   if( (prepFlags & SQLITE_PREPARE_SAVESQL)==0 ){
     p->expmask = 0;
+    p->smimask = 0;
   }
   assert( p->zSql==0 );
   p->zSql = sqlite3DbStrNDup(p->db, z, n);
@@ -5351,10 +5352,12 @@ void sqlite3VdbeReprepareOnBind(Vdbe *v, int iVar, int bSmallint){
        || (v->db->mDbFlags & DBFLAG_InternalFunc)!=0 );
 
   m = (iVar>=32) ? 0x80000000 : ((u32)1 << (iVar-1));
-  v->expmask |= m;
   if( bSmallint ){
-    v->smimask |= m;
+    if( (v->expmask & m)==0 ) v->smimask |= m;
+  }else{
+    v->smimask &= ~m;
   }
+  v->expmask |= m;
 
   /* smimask is always a subset of expmask */
   assert( (v->smimask & v->expmask) == v->smimask );

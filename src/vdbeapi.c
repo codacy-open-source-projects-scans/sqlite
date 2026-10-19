@@ -156,6 +156,7 @@ int sqlite3_clear_bindings(sqlite3_stmt *pStmt){
   int i;
   int rc = SQLITE_OK;
   Vdbe *p = (Vdbe*)pStmt;
+  u32 maskSmallInt = 0;  /* Bitmask of bindings with value 0 or 1 */
 #if SQLITE_THREADSAFE
   sqlite3_mutex *mutex;
 #endif
@@ -167,13 +168,18 @@ int sqlite3_clear_bindings(sqlite3_stmt *pStmt){
 #if SQLITE_THREADSAFE
   mutex = p->db->mutex;
 #endif
+
   sqlite3_mutex_enter(mutex);
   for(i=0; i<p->nVar; i++){
-    sqlite3VdbeMemRelease(&p->aVar[i]);
-    p->aVar[i].flags = MEM_Null;
+    Mem *pVar = &p->aVar[i];
+    if( (pVar->flags & MEM_Int)!=0 && pVar->u.i>=0 && pVar->u.i<=1 ){
+      maskSmallInt |= i>=31 ? 0x80000000 : ((u32)1)<<i;
+    }
+    sqlite3VdbeMemRelease(pVar);
+    pVar->flags = MEM_Null;
   }
   assert( (p->prepFlags & SQLITE_PREPARE_SAVESQL)!=0 || p->expmask==0 );
-  if( p->expmask ){
+  if( (p->expmask&~p->smimask)!=0 || (p->smimask&maskSmallInt)!=0 ){
     p->expired = 1;
   }
   sqlite3_mutex_leave(mutex);
@@ -1736,10 +1742,8 @@ static int vdbeUnbind(Vdbe *p, unsigned int i){
     sqlite3_mutex_leave(p->db->mutex);
     return SQLITE_RANGE;
   }
+
   pVar = &p->aVar[i];
-  sqlite3VdbeMemRelease(pVar);
-  pVar->flags = MEM_Null;
-  p->db->errCode = SQLITE_OK;
 
   /* If the bit corresponding to this variable in Vdbe.expmask is set, then
   ** binding a new value to this variable invalidates the current query plan.
@@ -1753,11 +1757,20 @@ static int vdbeUnbind(Vdbe *p, unsigned int i){
   assert( (p->prepFlags & SQLITE_PREPARE_SAVESQL)!=0 || p->expmask==0 );
   assert( (p->expmask & p->smimask)==p->smimask );
   if( p->expmask!=0 && (p->expmask & (i>=31 ? 0x80000000 : (u32)1<<i))!=0 ){
-    /* We might avoid a reprepare here if p->smimask is set and the old
-    ** value is an integer other than (0,1).  But that is such a corner
-    ** case that it does not seem worth the extra code to implement. */
-    p->expired = 1;
+    /* If the p->smimask bit is also set, then only expire the statement if
+    ** the value being clobbered was integer value 0 or 1. */
+    if( (p->smimask==0) 
+     || (p->smimask & (i>=31 ? 0x80000000 : (u32)1<<i))==0 
+     || ((pVar->flags & MEM_Int)!=0 && pVar->u.i>=0 && pVar->u.i<=1)
+    ){
+      p->expired = 1;
+    }
   }
+
+  sqlite3VdbeMemRelease(pVar);
+  pVar->flags = MEM_Null;
+  p->db->errCode = SQLITE_OK;
+
   return SQLITE_OK;
 }
 
@@ -1885,8 +1898,8 @@ int sqlite3_bind_int64(sqlite3_stmt *pStmt, int i, sqlite_int64 iValue){
         if( sm1!=sm2 ){
           p->expired = 1;
         }
-      }else if( (pVar->flags & MEM_Int)==0 || pVar->u.i!=iValue ){
-        /* Always expire if the value really is changing */
+      }else if( (pVar->flags & MEM_Int)==0 || iValue!=pVar->u.i ){
+        /* Always expire if the smimask bit is clear */
         p->expired = 1;
       }
     }
